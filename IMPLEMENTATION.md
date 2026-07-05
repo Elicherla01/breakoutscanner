@@ -63,6 +63,8 @@ streamlit run app.py
 python run_scanner.py app --port 8501
 ```
 
+![Streamlit dashboard — scan settings and breakout cards](docs/images/dashboard-screenshot.png)
+
 ### 3.2 First launch behaviour
 
 1. App loads **cached scan** from `data_cache/scan_results.csv` if it exists.

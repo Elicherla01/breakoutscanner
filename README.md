@@ -6,6 +6,12 @@ Built with Python, [yfinance](https://github.com/ranaroussi/yfinance), and [Stre
 
 **Repository:** [github.com/Elicherla01/breakoutscanner](https://github.com/Elicherla01/breakoutscanner)
 
+## Screenshot
+
+Streamlit dashboard — sidebar scan settings, force-refresh cache, and card view of bullish/bearish breakouts across 1H / 1D / 1W.
+
+![NIFTY 500 Breakout Scanner dashboard](docs/images/dashboard-screenshot.png)
+
 ---
 
 ## Features
@@ -78,6 +84,9 @@ breakoutscanner/
 ├── scanner.py          # Parallel universe scan
 ├── run_scanner.py      # CLI entry point
 ├── requirements.txt
+├── docs/
+│   └── images/
+│       └── dashboard-screenshot.png
 ├── README.md
 └── IMPLEMENTATION.md   # Detailed setup & operations guide
 ```
