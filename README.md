@@ -126,9 +126,9 @@ python run_scanner.py scan --max 500 -t 1D --csv breakouts.csv
 | Lookback (N) | 20 bars | Donchian window |
 | Volume mult | 1.25 (standard) / 1.5 (strict) | Min volume vs 20-bar avg |
 | ATR mult | 1.2 | Strict mode TR/ATR threshold |
-| Max symbols | 100 (UI slider) | Slice of NIFTY 500 universe |
+| Max symbols | 500 (UI default) | Full index; smaller values use even A–Z sample |
 
-**Tip:** For representative results across the full index, set **Max symbols to scan** to **500**.
+**Tip:** Keep **Max symbols to scan** at **500** for the full index. If you scan fewer, the app now samples **evenly across A–Z** (not just the first names in the NSE file).
 
 ---
 

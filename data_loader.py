@@ -83,6 +83,22 @@ def load_universe_symbols() -> list[str]:
     return DEFAULT_WATCHLIST.copy()
 
 
+def select_scan_universe(symbols: list[str], max_symbols: int) -> list[str]:
+    """
+    Choose symbols for a scan. When max_symbols < universe size, pick evenly
+    across the sorted list so partial scans are not biased to NSE file order
+    (which clusters many A/B names at the top).
+    """
+    unique = sorted({s.upper().strip() for s in symbols if s and str(s).strip()})
+    n = len(unique)
+    if n == 0:
+        return []
+    if max_symbols >= n:
+        return unique
+    step = n / max_symbols
+    return [unique[min(int(i * step), n - 1)] for i in range(max_symbols)]
+
+
 def _read_csv_cache(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=["date"], index_col="date")
     return _normalize_ohlcv(df)

@@ -7,7 +7,7 @@ import argparse
 import sys
 
 from config import STRICT_VOL_MULT, TIMEFRAMES, TIMEFRAME_ORDER, sort_timeframes
-from data_loader import load_universe_symbols
+from data_loader import load_universe_symbols, select_scan_universe
 from results_store import save_scan_results
 from scanner import filter_results, scan_universe
 
@@ -24,7 +24,7 @@ def main() -> int:
         choices=list(TIMEFRAMES.keys()),
         help="Timeframe(s): 1H, 1D, 1W (repeatable)",
     )
-    scan.add_argument("--max", type=int, default=100, help="Max symbols to scan")
+    scan.add_argument("--max", type=int, default=500, help="Max symbols to scan (even sample if < 500)")
     scan.add_argument("--vol-mult", type=float, default=None, help="Min volume ratio vs average (strict default 1.5)")
     scan.add_argument("--lookback", type=int, default=20, help="Donchian lookback bars")
     scan.add_argument(
@@ -54,7 +54,8 @@ def main() -> int:
         return 0
 
     timeframes = sort_timeframes(args.timeframe or list(TIMEFRAME_ORDER))
-    symbols = load_universe_symbols()[: args.max]
+    universe = load_universe_symbols()
+    symbols = select_scan_universe(universe, args.max)
     dir_filter = None if args.direction == "both" else args.direction
     vol_mult = args.vol_mult
     if vol_mult is None:

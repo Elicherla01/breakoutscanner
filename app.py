@@ -8,7 +8,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from config import STRICT_ATR_MULT, STRICT_VOL_MULT, TIMEFRAMES, TIMEFRAME_ORDER, sort_timeframes, ensure_dirs
-from data_loader import load_bars, load_universe_symbols
+from data_loader import load_bars, load_universe_symbols, select_scan_universe
 from results_store import load_scan_results, save_scan_results
 from scanner import filter_results, scan_universe
 
@@ -376,7 +376,19 @@ with st.sidebar:
         help="Breakout bar true range must exceed this multiple of 14-bar ATR.",
     )
     only_52w = st.checkbox("52-week high breakouts only (1D/1W)", value=False)
-    max_symbols = st.slider("Max symbols to scan", 10, len(universe), min(100, len(universe)), 10)
+    max_symbols = st.slider(
+        "Max symbols to scan",
+        10,
+        len(universe),
+        len(universe),
+        10,
+        help="Use 500 for full NIFTY 500. Smaller values sample evenly across the index (A–Z).",
+    )
+    if max_symbols < len(universe):
+        st.caption(
+            f"Scanning **{max_symbols}** of **{len(universe)}** symbols "
+            "(evenly spaced across the index — not just A/B names)."
+        )
     use_cache = st.checkbox("Use price cache", value=True)
     if breakout_mode == "strict":
         st.caption(
@@ -391,7 +403,7 @@ with st.sidebar:
 
     _render_disclaimer_sidebar()
 
-symbols = universe[:max_symbols]
+symbols = select_scan_universe(universe, max_symbols)
 dir_filter = None if direction == "Both" else direction.lower()
 
 if "breakout_results" not in st.session_state:
@@ -435,6 +447,8 @@ if force_refresh:
 
     scan_meta = {
         "symbols": len(symbols),
+        "universe_total": len(universe),
+        "universe_sample": "even" if max_symbols < len(universe) else "full",
         "timeframes": sort_timeframes(selected_tfs or ["1D"]),
         "mode": breakout_mode_label,
         "breakout_mode": breakout_mode,
@@ -457,7 +471,15 @@ if "breakout_results" in st.session_state:
     n_sym = meta.get("symbols", len(symbols))
     saved_at = meta.get("saved_at")
     if saved_at:
-        st.caption(f"Showing cached scan from **{saved_at}** — use **Force Refresh Scan** to update.")
+        sample = meta.get("universe_sample", "")
+        total = meta.get("universe_total")
+        if sample == "even" and total:
+            st.caption(
+                f"Showing cached scan from **{saved_at}** "
+                f"({n_sym} of {total} symbols, even sample) — **Force Refresh** to update."
+            )
+        else:
+            st.caption(f"Showing cached scan from **{saved_at}** — use **Force Refresh Scan** to update.")
 
     cached_tfs = sort_timeframes(meta.get("timeframes") or results["timeframe"].unique().tolist())
     display_tfs = [t for t in cached_tfs if t in TIMEFRAMES]
