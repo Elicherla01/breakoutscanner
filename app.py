@@ -12,6 +12,8 @@ from data_loader import load_bars, load_universe_symbols
 from results_store import load_scan_results, save_scan_results
 from scanner import filter_results, scan_universe
 
+DISCLAIMER_URL = "https://github.com/Elicherla01/breakoutscanner/blob/main/DISCLAIMER.md"
+
 st.set_page_config(
     page_title="NIFTY 500 Breakout Scanner",
     page_icon="🚀",
@@ -110,6 +112,62 @@ _DIR_STYLE = {
     "bullish": ("🟢 Bullish", "#16a34a"),
     "bearish": ("🔴 Bearish", "#dc2626"),
 }
+
+_DISCLAIMER_SIDEBAR = """
+**Not financial advice.** For informational, educational, and research use only.
+
+- Scan results are **algorithmic outputs** — not buy/sell recommendations  
+- Trading securities involves **substantial risk of loss**  
+- Market data may be **delayed, incomplete, or inaccurate**  
+- Past breakouts do **not** guarantee future performance  
+- Authors are **not** SEBI-registered investment advisers  
+- Consult a **qualified financial adviser** before trading  
+
+[Full disclaimer]({url})
+""".format(
+    url=DISCLAIMER_URL
+)
+
+
+def _render_disclaimer_banner() -> None:
+    st.markdown(
+        f"""
+<div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.35);
+border-radius:10px;padding:0.75rem 1rem;margin-bottom:1rem;">
+<p style="color:#fde68a;margin:0;font-size:0.88rem;line-height:1.5;">
+<strong>⚠️ Disclaimer:</strong> This app is for <strong>research and education only</strong> — not investment advice.
+Breakout signals are not recommendations to trade. You may lose capital. Data from third-party sources
+may be delayed or wrong.
+<a href="{DISCLAIMER_URL}" target="_blank" rel="noopener" style="color:#fcd34d;">Read full disclaimer</a>
+</p></div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_disclaimer_sidebar() -> None:
+    st.divider()
+    st.markdown("#### ⚖️ Legal disclaimer")
+    st.markdown(_DISCLAIMER_SIDEBAR)
+
+
+def _render_disclaimer_footer() -> None:
+    st.markdown(
+        f"""
+---
+<p style="font-size:0.75rem;color:#94a3b8;line-height:1.55;margin-top:1.5rem;">
+<strong>Disclaimer:</strong> The NIFTY 500 Breakout Scanner is provided for informational and educational
+purposes only. It does not constitute investment, trading, tax, or legal advice and does not create an
+adviser–client relationship. Trading in securities involves substantial risk of loss. Algorithmic scan
+outputs are based on historical data and may be inaccurate. Past performance is not indicative of future
+results. Use at your own risk.
+<a href="{DISCLAIMER_URL}" target="_blank" rel="noopener" style="color:#94a3b8;">Full disclaimer</a>
+·
+<a href="https://breakoutscanner.streamlit.app/" style="color:#94a3b8;">Live app</a>
+</p>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def _breakout_card_html(row: pd.Series) -> str:
@@ -281,6 +339,8 @@ and <strong>1 Week</strong> timeframes.
     unsafe_allow_html=True,
 )
 
+_render_disclaimer_banner()
+
 universe = load_universe_symbols()
 
 with st.sidebar:
@@ -328,6 +388,8 @@ with st.sidebar:
             "Standard: close > prior N-bar high/low + volume surge + strong close. "
             "Weekly bars from daily data (Fri close)."
         )
+
+    _render_disclaimer_sidebar()
 
 symbols = universe[:max_symbols]
 dir_filter = None if direction == "Both" else direction.lower()
@@ -460,3 +522,5 @@ if "breakout_results" in st.session_state:
 
 else:
     st.info("No cached scan yet. Configure settings and click **Force Refresh Scan**.")
+
+_render_disclaimer_footer()
