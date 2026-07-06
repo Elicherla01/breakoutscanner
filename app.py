@@ -9,7 +9,12 @@ from plotly.subplots import make_subplots
 
 from config import STRICT_ATR_MULT, STRICT_VOL_MULT, TIMEFRAMES, TIMEFRAME_ORDER, sort_timeframes, ensure_dirs
 from data_loader import load_bars, load_universe_symbols, select_scan_universe
-from results_store import load_scan_results, save_scan_results
+from results_store import (
+    cached_scan_available,
+    format_scanned_at,
+    load_scan_results,
+    save_scan_results,
+)
 from scanner import filter_results, scan_universe
 
 DISCLAIMER_URL = "https://github.com/Elicherla01/breakoutscanner/blob/main/DISCLAIMER.md"
@@ -149,6 +154,44 @@ def _render_disclaimer_sidebar() -> None:
     st.divider()
     st.markdown("#### ⚖️ Legal disclaimer")
     st.markdown(_DISCLAIMER_SIDEBAR)
+
+
+def _render_last_scan_panel(meta: dict, results: pd.DataFrame | None = None) -> None:
+    scanned_at = meta.get("scanned_at_display") or format_scanned_at(meta.get("scanned_at") or meta.get("saved_at"))
+    if not scanned_at or scanned_at == "—":
+        return
+
+    n_breakouts = int(meta.get("breakout_count", len(results) if results is not None else 0))
+    n_sym = meta.get("symbols_scanned", meta.get("symbols", "—"))
+    timeframes = meta.get("timeframes", "")
+    if isinstance(timeframes, list):
+        timeframes = ", ".join(timeframes)
+    mode = meta.get("mode", meta.get("breakout_mode", "—"))
+    sample = meta.get("universe_sample", "")
+    total = meta.get("universe_total")
+    if sample == "even" and total:
+        universe_txt = f"{n_sym} of {total} symbols (even sample)"
+    else:
+        universe_txt = f"{n_sym} symbols"
+
+    st.markdown(
+        f"""
+<div style="background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.35);
+border-radius:10px;padding:0.85rem 1.1rem;margin-bottom:0.85rem;">
+<p style="color:#93c5fd;margin:0 0 0.35rem;font-size:0.95rem;font-weight:700;">
+🕒 Last scanned: {scanned_at}
+</p>
+<p style="color:#cbd5e1;margin:0;font-size:0.84rem;line-height:1.55;">
+<strong>{n_breakouts}</strong> breakouts · <strong>{universe_txt}</strong> ·
+<strong>{timeframes or "—"}</strong> · <strong>{mode}</strong>
+</p>
+<p style="color:#94a3b8;margin:0.35rem 0 0;font-size:0.76rem;">
+Cached locally in <code>data_cache/scan_results.csv</code> and <code>data_cache/scan_info.csv</code>
+</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_disclaimer_footer() -> None:
@@ -406,13 +449,13 @@ with st.sidebar:
 symbols = select_scan_universe(universe, max_symbols)
 dir_filter = None if direction == "Both" else direction.lower()
 
-if "breakout_results" not in st.session_state:
-    cached_df, cached_meta = load_scan_results()
-    if cached_df is not None:
-        st.session_state["breakout_results"] = cached_df
-        st.session_state["breakout_scan_meta"] = cached_meta
+cached_df, cached_meta = load_scan_results()
 
 force_refresh = st.button("Force Refresh Scan", type="primary", help="Re-run scan and overwrite local CSV cache.")
+
+if not force_refresh and cached_df is not None:
+    st.session_state["breakout_results"] = cached_df
+    st.session_state["breakout_scan_meta"] = cached_meta
 
 if force_refresh:
     progress = st.progress(0.0, text="Loading prices…")
@@ -463,25 +506,29 @@ if force_refresh:
     _, saved_meta = load_scan_results()
     st.session_state["breakout_results"] = filtered
     st.session_state["breakout_scan_meta"] = saved_meta or scan_meta
-    st.success(f"Scan complete — {len(filtered)} breakouts saved to local cache.")
+    scanned_display = format_scanned_at(
+        st.session_state.get("breakout_scan_meta", {}).get("scanned_at")
+    )
+    st.success(
+        f"Scan complete — {len(filtered)} breakouts saved at **{scanned_display}** "
+        f"to `data_cache/scan_results.csv`."
+    )
+
+panel_meta = st.session_state.get("breakout_scan_meta") or cached_meta
+panel_results = st.session_state.get("breakout_results", cached_df)
+if panel_meta and panel_results is not None:
+    _render_last_scan_panel(panel_meta, panel_results)
 
 if "breakout_results" in st.session_state:
     results = st.session_state["breakout_results"]
     meta = st.session_state.get("breakout_scan_meta", {})
-    n_sym = meta.get("symbols", len(symbols))
-    saved_at = meta.get("saved_at")
-    if saved_at:
-        sample = meta.get("universe_sample", "")
-        total = meta.get("universe_total")
-        if sample == "even" and total:
-            st.caption(
-                f"Showing cached scan from **{saved_at}** "
-                f"({n_sym} of {total} symbols, even sample) — **Force Refresh** to update."
-            )
-        else:
-            st.caption(f"Showing cached scan from **{saved_at}** — use **Force Refresh Scan** to update.")
+    n_sym = meta.get("symbols_scanned", meta.get("symbols", len(symbols)))
 
-    cached_tfs = sort_timeframes(meta.get("timeframes") or results["timeframe"].unique().tolist())
+    cached_tfs_raw = meta.get("timeframes") or results["timeframe"].unique().tolist()
+    if isinstance(cached_tfs_raw, str):
+        cached_tfs = sort_timeframes([t.strip() for t in cached_tfs_raw.split(",") if t.strip()])
+    else:
+        cached_tfs = sort_timeframes(cached_tfs_raw)
     display_tfs = [t for t in cached_tfs if t in TIMEFRAMES]
     if selected_tfs and set(selected_tfs) != set(cached_tfs):
         st.info("Sidebar filters changed. Results below are from the last saved scan until you force refresh.")
@@ -491,13 +538,18 @@ if "breakout_results" in st.session_state:
     else:
         bull = int((results["direction"] == "bullish").sum())
         bear = int((results["direction"] == "bearish").sum())
-        c1, c2, c3, c4 = st.columns(4)
+        scanned_label = meta.get("scanned_at_display") or format_scanned_at(
+            meta.get("scanned_at") or meta.get("saved_at"),
+            short=True,
+        )
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Breakouts", len(results))
         c2.metric("Bullish", bull)
         c3.metric("Bearish", bear)
         c4.metric("Symbols Scanned", n_sym)
+        c5.metric("Last Scanned", scanned_label)
         if meta.get("mode"):
-            st.caption(f"Mode: **{meta['mode']}**")
+            st.caption(f"Mode: **{meta['mode']}** · cached results — use **Force Refresh Scan** to update")
 
         tf_tabs = st.tabs(["All"] + [TIMEFRAMES[t].label for t in display_tfs])
 
@@ -542,7 +594,7 @@ if "breakout_results" in st.session_state:
             with tf_tabs[i]:
                 _show(results[results["timeframe"] == tf], tf.lower())
 
-else:
+elif not cached_scan_available():
     st.info("No cached scan yet. Configure settings and click **Force Refresh Scan**.")
 
 _render_disclaimer_footer()

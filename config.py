@@ -18,6 +18,7 @@ YFINANCE_SUFFIX = ".NS"
 NIFTY500_URL = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
 UNIVERSE_CACHE = DATA_DIR / "nifty500_symbols.csv"
 SCAN_RESULTS_CSV = DATA_DIR / "scan_results.csv"
+SCAN_INFO_CSV = DATA_DIR / "scan_info.csv"
 SCAN_META_JSON = DATA_DIR / "scan_meta.json"
 
 LOOKBACK_DAYS = 400
