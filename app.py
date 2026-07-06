@@ -517,9 +517,44 @@ def _cpr_status_rate(row: pd.Series) -> str:
     """Status/Rate column: index LTP or type badge (V + W, WIDE, etc.)."""
     sym = str(row.get("symbol", "")).upper()
     if sym in _INDEX_SYMBOLS:
-        return f"{float(row['ltp']):,.2f}"
+        ltp = row.get("ltp")
+        return f"{float(ltp):,.2f}" if ltp is not None and pd.notna(ltp) else "—"
     cpr_type = str(row.get("type", "—"))
     return cpr_type.replace("+", " + ")
+
+
+def _normalize_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure CPR scan frames have expected columns after CSV round-trip."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    for col in ("is_virgin", "is_narrow"):
+        if col in out.columns:
+            out[col] = out[col].map(_parse_bool_value)
+    for col in ("distance_pct", "width_pct", "width_percentile", "ltp", "tc", "bc", "pivot"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    if "is_narrow" not in out.columns:
+        out["is_narrow"] = False
+    if "type" not in out.columns:
+        out["type"] = "—"
+    return out
+
+
+def _parse_bool_value(val: object) -> bool:
+    if isinstance(val, bool):
+        return val
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return False
+    return str(val).strip().lower() in {"1", "true", "yes", "t"}
+
+
+def _cpr_metric_count(df: pd.DataFrame, col: str, *, match: str | None = None) -> int:
+    if df.empty or col not in df.columns:
+        return 0
+    if match is None:
+        return int(df[col].sum())
+    return int((df[col] == match).sum())
 
 
 def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
@@ -527,9 +562,21 @@ def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
         return df
     display = df.copy()
     display["status_rate"] = display.apply(_cpr_status_rate, axis=1)
-    display["virgin_status"] = display["is_virgin"].map(lambda x: "VIRGIN" if x else "TOUCHED")
-    display["distance"] = display["distance_pct"].map(lambda x: f"{x:+.2f}%")
-    display["trend_icon"] = display["trend"].map(_CPR_TREND_ICONS).fillna("—")
+    if "is_virgin" in display.columns:
+        display["virgin_status"] = display["is_virgin"].map(lambda x: "VIRGIN" if x else "TOUCHED")
+    else:
+        display["virgin_status"] = "—"
+    if "distance_pct" in display.columns:
+        display["distance"] = display["distance_pct"].map(
+            lambda x: f"{x:+.2f}%" if pd.notna(x) else "—"
+        )
+    else:
+        display["distance"] = "—"
+    if "trend" in display.columns:
+        display["trend_icon"] = display["trend"].map(_CPR_TREND_ICONS).fillna("—")
+    else:
+        display["trend_icon"] = "—"
+    display = display.drop(columns=["type"], errors="ignore")
     return display.rename(
         columns={
             "symbol": "Symbol",
@@ -656,6 +703,60 @@ def _render_narrow_cpr_controls(cached_meta: dict) -> float:
     return narrow_pct
 
 
+def _render_cpr_table(display: pd.DataFrame) -> None:
+    table_cols = [
+        c
+        for c in [
+            "Symbol",
+            "Status / Rate",
+            "Type",
+            "Distance",
+            "Trend",
+            "LTP",
+            "CPR Width %",
+            "Width %ile",
+            "TC",
+            "BC",
+            "Pivot",
+            "Days Virgin",
+            "CPR From",
+            "Session",
+        ]
+        if c in display.columns
+    ]
+    if display.empty or not table_cols:
+        st.info("No CPR rows match the current filters.")
+        return
+
+    def _color_type(val: str) -> str:
+        if val == "VIRGIN":
+            return "color: #4ade80; font-weight: 700"
+        if val == "TOUCHED":
+            return "color: #f87171; font-weight: 700"
+        return ""
+
+    def _color_status(val: str) -> str:
+        key = str(val).replace(" ", "")
+        if key == "V+W":
+            return "background-color: rgba(124,58,237,0.35); color: #ddd6fe; font-weight: 700"
+        if key == "V+N":
+            return "background-color: rgba(37,99,235,0.35); color: #bfdbfe; font-weight: 700"
+        if val == "WIDE":
+            return "background-color: rgba(220,38,38,0.35); color: #fecaca; font-weight: 700"
+        return ""
+
+    subset = display[table_cols]
+    try:
+        styler = subset.style
+        map_fn = getattr(styler, "map", styler.applymap)
+        styled = map_fn(_color_status, subset=["Status / Rate"])
+        map_fn2 = getattr(styled, "map", styled.applymap)
+        styled = map_fn2(_color_type, subset=["Type"])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+    except Exception:
+        st.dataframe(subset, use_container_width=True, hide_index=True)
+
+
 def render_cpr_tab(
     scan_symbols: list[str],
     *,
@@ -717,7 +818,7 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
     force_cpr = st.button("🔍 Scan CPR", type="primary", key="cpr_force_scan")
 
     if not force_cpr and cached_cpr_df is not None and "cpr_results" not in st.session_state:
-        st.session_state["cpr_results"] = cached_cpr_df
+        st.session_state["cpr_results"] = _normalize_cpr_results(cached_cpr_df)
         st.session_state["cpr_scan_meta"] = cached_cpr_meta
 
     if force_cpr:
@@ -748,9 +849,13 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
         }
         save_cpr_results(raw, scan_meta)
         _, saved_meta = load_cpr_results()
-        st.session_state["cpr_results"] = raw
+        st.session_state["cpr_results"] = _normalize_cpr_results(raw)
         st.session_state["cpr_scan_meta"] = saved_meta or scan_meta
         st.session_state["cpr_scan_timeframe"] = cpr_timeframe
+        if chart_symbols := raw["symbol"].astype(str).tolist() if "symbol" in raw.columns else []:
+            prev_pick = st.session_state.get("cpr_chart_pick")
+            if prev_pick not in chart_symbols:
+                st.session_state["cpr_chart_pick"] = chart_symbols[0]
         st.success(f"CPR scan complete — {len(raw)} symbols")
 
     results = st.session_state.get("cpr_results")
@@ -769,9 +874,14 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
         )
 
     meta = st.session_state.get("cpr_scan_meta", cached_cpr_meta or {})
+    results = _normalize_cpr_results(results)
 
     results = apply_narrow_percentile(results, float(narrow_pct))
-    scan_narrow = float(meta.get("narrow_percentile") or narrow_pct)
+    scan_narrow_raw = meta.get("narrow_percentile")
+    try:
+        scan_narrow = float(scan_narrow_raw) if scan_narrow_raw not in (None, "") else float(narrow_pct)
+    except (TypeError, ValueError):
+        scan_narrow = float(narrow_pct)
     if abs(scan_narrow - narrow_pct) > 0.01:
         st.info(
             f"Narrow threshold changed to **bottom {narrow_pct:g}%** — "
@@ -796,10 +906,10 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
 
     m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
     m1.metric("Total", len(filtered))
-    m2.metric("Virgin", int(filtered["is_virgin"].sum()) if not filtered.empty else 0)
-    m3.metric("V + W", int((filtered["type"] == "V+W").sum()) if not filtered.empty else 0)
-    m4.metric("V + N", int((filtered["type"] == "V+N").sum()) if not filtered.empty else 0)
-    m5.metric("Narrow", int(filtered["is_narrow"].sum()) if not filtered.empty else 0)
+    m2.metric("Virgin", _cpr_metric_count(filtered, "is_virgin"))
+    m3.metric("V + W", _cpr_metric_count(filtered, "type", match="V+W"))
+    m4.metric("V + N", _cpr_metric_count(filtered, "type", match="V+N"))
+    m5.metric("Narrow", _cpr_metric_count(filtered, "is_narrow"))
     m6.metric("Narrow cutoff", f"≤{narrow_pct:g}%")
     m7.metric("Last scan", scanned_label or "—")
 
@@ -810,66 +920,32 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
     )
 
     display = _style_cpr_results(filtered)
-    table_cols = [
-        c
-        for c in [
-            "Symbol",
-            "Status / Rate",
-            "Type",
-            "Distance",
-            "Trend",
-            "LTP",
-            "CPR Width %",
-            "Width %ile",
-            "TC",
-            "BC",
-            "Pivot",
-            "Days Virgin",
-            "CPR From",
-            "Session",
-        ]
-        if c in display.columns
-    ]
+    _render_cpr_table(display)
 
-    def _color_type(val: str) -> str:
-        if val == "VIRGIN":
-            return "color: #4ade80; font-weight: 700"
-        if val == "TOUCHED":
-            return "color: #f87171; font-weight: 700"
-        return ""
-
-    def _color_status(val: str) -> str:
-        key = val.replace(" ", "")
-        if key in ("V+W",):
-            return f"background-color: rgba(124,58,237,0.35); color: #ddd6fe; font-weight: 700"
-        if key in ("V+N",):
-            return f"background-color: rgba(37,99,235,0.35); color: #bfdbfe; font-weight: 700"
-        if val == "WIDE":
-            return f"background-color: rgba(220,38,38,0.35); color: #fecaca; font-weight: 700"
-        return ""
-
-    styled = (
-        display[table_cols]
-        .style.map(_color_status, subset=["Status / Rate"])
-        .map(_color_type, subset=["Type"])
+    chart_symbols = (
+        filtered["symbol"].astype(str).tolist()
+        if not filtered.empty and "symbol" in filtered.columns
+        else results["symbol"].astype(str).tolist() if "symbol" in results.columns else []
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-
-    chart_symbols = filtered["symbol"].tolist() if not filtered.empty else results["symbol"].tolist()
     if chart_symbols:
+        prev_pick = st.session_state.get("cpr_chart_pick")
+        if prev_pick not in chart_symbols:
+            st.session_state["cpr_chart_pick"] = chart_symbols[0]
         pick = st.selectbox("Chart symbol", chart_symbols, key="cpr_chart_pick")
-        st.plotly_chart(_cpr_chart(pick, timeframe=scan_tf), use_container_width=True, key=f"cpr_plot_{pick}")
-        row = filtered[filtered["symbol"] == pick]
-        if row.empty:
-            row = results[results["symbol"] == pick]
+        st.plotly_chart(_cpr_chart(pick, timeframe=scan_tf), use_container_width=True, key="cpr_plotly_chart")
+        row = filtered[filtered["symbol"].astype(str) == pick] if "symbol" in filtered.columns else pd.DataFrame()
+        if row.empty and "symbol" in results.columns:
+            row = results[results["symbol"].astype(str) == pick]
         if not row.empty:
             r = row.iloc[0]
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("CPR Type", r["type"])
-            c2.metric("Virgin?", "Yes" if r["is_virgin"] else "Touched")
-            c3.metric("Width %ile", f"{r['width_percentile']:.1f}")
-            c4.metric("TC / BC", f"{r['tc']:.2f} / {r['bc']:.2f}")
-            c5.metric("Distance", f"{r['distance_pct']:+.2f}%")
+            c1.metric("CPR Type", r.get("type", "—"))
+            c2.metric("Virgin?", "Yes" if r.get("is_virgin") else "Touched")
+            width_pctile = r.get("width_percentile")
+            c3.metric("Width %ile", f"{float(width_pctile):.1f}" if pd.notna(width_pctile) else "—")
+            c4.metric("TC / BC", f"{r.get('tc', '—')} / {r.get('bc', '—')}")
+            dist = r.get("distance_pct")
+            c5.metric("Distance", f"{float(dist):+.2f}%" if pd.notna(dist) else "—")
 
         st.download_button(
             "Download CPR CSV",

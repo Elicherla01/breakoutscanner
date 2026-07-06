@@ -68,7 +68,10 @@ def apply_narrow_percentile(
 ) -> pd.DataFrame:
     """Reclassify narrow/wide types when the user changes the percentile slider."""
     if df.empty or "width_percentile" not in df.columns:
-        return df
+        out = df.copy()
+        if not out.empty and "is_narrow" not in out.columns:
+            out["is_narrow"] = False
+        return out
 
     out = df.copy()
     out["is_narrow"] = out["width_percentile"] <= narrow_percentile

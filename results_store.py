@@ -233,6 +233,13 @@ def load_cpr_results() -> tuple[Optional[pd.DataFrame], dict[str, Any]]:
         for col in ("source_date", "session_date"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+        for col in ("distance_pct", "width_pct", "width_percentile", "ltp", "tc", "bc", "pivot"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "is_narrow" not in df.columns:
+            df["is_narrow"] = False
+        if "type" not in df.columns:
+            df["type"] = "—"
         meta = load_cpr_scan_info()
         return df, meta
     except Exception:
