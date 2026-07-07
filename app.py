@@ -21,6 +21,7 @@ from config import (
     UNIVERSE_CHOICES,
     UNIVERSE_FNO,
     UNIVERSE_NIFTY500,
+    cpr_scan_paths,
     ensure_dirs,
     sort_timeframes,
 )
@@ -529,6 +530,24 @@ def _render_cpr_summary_metrics(
     _render_card_html(html)
 
 
+def _cpr_results_csv_label(timeframe: str) -> str:
+    return f"data_cache/{cpr_scan_paths(timeframe)[0].name}"
+
+
+def _load_cpr_cache_into_session() -> tuple[dict[str, pd.DataFrame], dict[str, dict]]:
+    """Load Daily/Weekly CPR CSV caches into session state (once per timeframe)."""
+    by_tf: dict[str, pd.DataFrame] = st.session_state.setdefault("cpr_results_by_tf", {})
+    meta_by_tf: dict[str, dict] = st.session_state.setdefault("cpr_scan_meta_by_tf", {})
+    for tf in ("Daily", "Weekly"):
+        if tf in by_tf:
+            continue
+        df, meta = load_cpr_results(timeframe=tf)
+        if df is not None and not df.empty:
+            by_tf[tf] = _normalize_cpr_results(df)
+            meta_by_tf[tf] = meta or {}
+    return by_tf, meta_by_tf
+
+
 def _render_cpr_session_panel(
     *,
     session_date: object,
@@ -536,13 +555,14 @@ def _render_cpr_session_panel(
     universe_choice: str,
     narrow_pct: float,
     scanned_label: str = "",
+    results_csv: str = "data_cache/cpr_scan_results.csv",
 ) -> None:
     cpr_from_label = "prev trading day" if scan_tf == "Daily" else "prev completed week"
     html = f"""
 <div class="cpr-meta-panel">
   <strong>Last scanned {scanned_label}</strong> · Session {session_date} · {scan_tf} CPR · {universe_choice} ·
   CPR from {cpr_from_label} · narrow = bottom {narrow_pct:g}% of 1Y width history ·
-  cached in <code>data_cache/cpr_scan_results.csv</code>
+  cached in <code>{results_csv}</code>
 </div>
 """
     _render_card_html(html)
@@ -1104,11 +1124,6 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
 
     _render_cpr_legend()
 
-    cached_cpr_df, cached_cpr_meta = load_cpr_results()
-    cpr_meta = cached_cpr_meta or {}
-    active_cpr_meta = st.session_state.get("cpr_scan_meta") or cpr_meta
-    scanned_top = _cpr_scanned_label(active_cpr_meta, short=True)
-
     c1, c2 = st.columns([1.1, 1])
     with c1:
         cpr_timeframe = st.radio(
@@ -1118,9 +1133,12 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
             key="cpr_timeframe",
         )
     with c2:
+        by_tf, meta_by_tf = _load_cpr_cache_into_session()
+        active_cpr_meta = meta_by_tf.get(cpr_timeframe) or st.session_state.get("cpr_scan_meta") or {}
+        scanned_top = _cpr_scanned_label(active_cpr_meta, short=True)
         _render_cpr_top_stats(symbol_count=len(scan_symbols), scanned_label=scanned_top)
 
-    narrow_pct = _render_narrow_cpr_controls(cpr_meta)
+    narrow_pct = _render_narrow_cpr_controls(active_cpr_meta)
 
     f1, f2, f3, f4 = st.columns(4)
     with f1:
@@ -1143,17 +1161,12 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
         trend_filter = st.selectbox("Trend", ["All", "above", "below", "inside"], key="cpr_trend_filter")
 
     use_cache = st.checkbox("Use price cache", value=True, key="cpr_use_cache")
-    force_cpr = st.button("🔍 Scan CPR", type="primary", key="cpr_force_scan")
-
-    if not force_cpr and cached_cpr_df is not None and "cpr_results" not in st.session_state:
-        seeded = _normalize_cpr_results(cached_cpr_df)
-        st.session_state["cpr_results"] = seeded
-        st.session_state["cpr_scan_meta"] = cached_cpr_meta
-        tf_key = str(cached_cpr_meta.get("timeframe", "Daily"))
-        st.session_state.setdefault("cpr_results_by_tf", {})[tf_key] = seeded
-        st.session_state["cpr_scan_timeframe"] = tf_key
-
-    by_tf: dict[str, pd.DataFrame] = st.session_state.setdefault("cpr_results_by_tf", {})
+    force_cpr = st.button(
+        "Force Refresh CPR Scan",
+        type="primary",
+        help="Re-run CPR scan and overwrite the local CSV cache for the selected timeframe.",
+        key="cpr_force_scan",
+    )
 
     if force_cpr:
         progress = st.progress(0.0, text="Scanning CPR…")
@@ -1182,46 +1195,51 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
             "narrow_percentile": narrow_pct,
         }
         save_cpr_results(raw, scan_meta)
-        _, saved_meta = load_cpr_results()
-        st.session_state["cpr_results"] = _normalize_cpr_results(raw)
+        _, saved_meta = load_cpr_results(timeframe=cpr_timeframe)
+        normalized = _normalize_cpr_results(raw)
+        st.session_state["cpr_results"] = normalized
         st.session_state["cpr_scan_meta"] = saved_meta or scan_meta
         st.session_state["cpr_scan_timeframe"] = cpr_timeframe
-        by_tf[cpr_timeframe] = st.session_state["cpr_results"]
+        by_tf[cpr_timeframe] = normalized
+        meta_by_tf[cpr_timeframe] = saved_meta or scan_meta
         if chart_symbols := raw["symbol"].astype(str).tolist() if "symbol" in raw.columns else []:
             prev_pick = st.session_state.get("cpr_chart_pick")
             if prev_pick not in chart_symbols:
                 st.session_state["cpr_chart_pick"] = chart_symbols[0]
-        st.success(f"CPR scan complete — {len(raw)} symbols")
+        scanned_display = format_scanned_at((saved_meta or scan_meta).get("scanned_at"))
+        st.success(
+            f"CPR scan complete — {len(raw)} symbols saved at **{scanned_display}** "
+            f"to `{_cpr_results_csv_label(cpr_timeframe)}`."
+        )
 
-    elif cpr_timeframe not in by_tf and (
-        st.session_state.get("cpr_results") is not None or cached_cpr_df is not None
-    ):
-        with st.spinner(f"Building {cpr_timeframe} CPR from cached prices…"):
-            raw = scan_cpr_universe(
-                scan_symbols,
-                use_cache=use_cache,
-                narrow_percentile=float(narrow_pct),
-                timeframe=cpr_timeframe,
-            )
-        by_tf[cpr_timeframe] = _normalize_cpr_results(raw)
+    if cpr_timeframe in by_tf:
         st.session_state["cpr_results"] = by_tf[cpr_timeframe]
-        st.session_state["cpr_scan_timeframe"] = cpr_timeframe
-
-    elif cpr_timeframe in by_tf:
-        st.session_state["cpr_results"] = by_tf[cpr_timeframe]
+        st.session_state["cpr_scan_meta"] = meta_by_tf.get(cpr_timeframe, {})
         st.session_state["cpr_scan_timeframe"] = cpr_timeframe
 
     results = st.session_state.get("cpr_results")
     if results is None or (isinstance(results, pd.DataFrame) and results.empty):
-        if cached_cpr_scan_available():
-            st.info("Cached CPR results available. Click **Scan CPR** to refresh, or load from cache on next visit.")
+        if cached_cpr_scan_available(cpr_timeframe):
+            st.info(
+                f"Cached {cpr_timeframe} CPR results are empty. Click **Force Refresh CPR Scan** to rebuild."
+            )
         else:
-            st.info("Click **Scan CPR** to build the Virgin CPR screener.")
+            st.info(
+                f"No cached {cpr_timeframe} CPR scan yet. Click **Force Refresh CPR Scan** "
+                f"to scan and save to `{_cpr_results_csv_label(cpr_timeframe)}`."
+            )
         return
 
-    meta = st.session_state.get("cpr_scan_meta", cached_cpr_meta or {})
+    meta = st.session_state.get("cpr_scan_meta", meta_by_tf.get(cpr_timeframe, {}))
     results = _normalize_cpr_results(results)
     scan_tf = cpr_timeframe
+
+    cached_universe = meta.get("universe_choice")
+    if cached_universe and cached_universe != universe_choice:
+        st.info(
+            f"Universe changed to **{universe_choice}**. Showing cached **{cached_universe}** scan "
+            "until you force refresh."
+        )
 
     results = apply_narrow_percentile(results, float(narrow_pct))
     scan_narrow_raw = meta.get("narrow_percentile")
@@ -1261,17 +1279,23 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
     _render_cpr_session_panel(
         session_date=session_date,
         scan_tf=scan_tf,
-        universe_choice=universe_choice,
+        universe_choice=meta.get("universe_choice") or universe_choice,
         narrow_pct=narrow_pct,
         scanned_label=scanned_label,
+        results_csv=_cpr_results_csv_label(scan_tf),
     )
 
-    if not results.empty and "session_date" in results.columns:
+    if not force_cpr:
+        st.caption(
+            f"Showing cached **{scan_tf}** CPR results — use **Force Refresh CPR Scan** to update."
+        )
+
+    if not force_cpr and not results.empty and "session_date" in results.columns:
         latest_session = pd.to_datetime(results["session_date"], errors="coerce").max()
         if pd.notna(latest_session) and latest_session.date() < date.today():
             st.warning(
                 f"Latest price session in scan is **{latest_session.date()}**. "
-                "Uncheck **Use price cache** and click **Scan CPR** for today's data."
+                "Uncheck **Use price cache** and click **Force Refresh CPR Scan** for today's data."
             )
 
     display = _style_cpr_results(filtered)

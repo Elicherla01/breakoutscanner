@@ -33,6 +33,17 @@ SCAN_META_JSON = DATA_DIR / "scan_meta.json"
 CPR_SCAN_RESULTS_CSV = DATA_DIR / "cpr_scan_results.csv"
 CPR_SCAN_INFO_CSV = DATA_DIR / "cpr_scan_info.csv"
 CPR_SCAN_META_JSON = DATA_DIR / "cpr_scan_meta.json"
+CPR_TIMEFRAMES: tuple[str, ...] = ("Daily", "Weekly")
+
+
+def cpr_scan_paths(timeframe: str) -> tuple[Path, Path, Path]:
+    """Per-timeframe CPR cache paths: results CSV, info CSV, meta JSON."""
+    slug = timeframe.strip().lower()
+    return (
+        DATA_DIR / f"cpr_scan_results_{slug}.csv",
+        DATA_DIR / f"cpr_scan_info_{slug}.csv",
+        DATA_DIR / f"cpr_scan_meta_{slug}.json",
+    )
 
 LOOKBACK_DAYS = 400
 
