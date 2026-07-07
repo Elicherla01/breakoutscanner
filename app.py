@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -535,10 +537,11 @@ def _render_cpr_session_panel(
     narrow_pct: float,
     scanned_label: str = "",
 ) -> None:
+    cpr_from_label = "prev trading day" if scan_tf == "Daily" else "prev completed week"
     html = f"""
 <div class="cpr-meta-panel">
   <strong>Last scanned {scanned_label}</strong> · Session {session_date} · {scan_tf} CPR · {universe_choice} ·
-  narrow = bottom {narrow_pct:g}% of 1Y width history ·
+  CPR from {cpr_from_label} · narrow = bottom {narrow_pct:g}% of 1Y width history ·
   cached in <code>data_cache/cpr_scan_results.csv</code>
 </div>
 """
@@ -826,7 +829,7 @@ def _cpr_card_html(row: pd.Series) -> str:
         f"</div>"
         f'<div class="card-stat-row">{"".join(stats_row1)}</div>'
         f'<div class="card-stat-row">{"".join(stats_row2)}</div>'
-        f'<span class="card-foot">Days virgin {days_virgin} · CPR from {source_date} · Session {session_date}</span>'
+        f'<span class="card-foot">CPR from {source_date} (prev session) · Session {session_date} · {days_virgin}d virgin</span>'
         f"</div>"
     )
 
@@ -913,7 +916,7 @@ def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
             "width_pct": "CPR Width %",
             "width_percentile": "Width %ile",
             "days_virgin": "Days Virgin",
-            "source_date": "CPR From",
+            "source_date": "CPR From (prev)",
             "session_date": "Session",
         }
     )
@@ -1041,7 +1044,7 @@ def _render_cpr_table(display: pd.DataFrame) -> None:
             "BC",
             "Pivot",
             "Days Virgin",
-            "CPR From",
+            "CPR From (prev)",
             "Session",
         ]
         if c in display.columns
@@ -1092,7 +1095,8 @@ def render_cpr_tab(
 padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
 <h3 style="color:white;margin:0;">📊 Virgin CPR Scanner</h3>
 <p style="color:#c7d2fe;margin:0.35rem 0 0;font-size:0.9rem;">
-Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touched the CPR zone [BC, TC] today.
+<strong>Daily</strong> CPR uses the previous trading day's OHLC; <strong>Weekly</strong> uses the prior completed week.
+<strong>Virgin</strong> = price has not touched the CPR zone [BC, TC] in the current session/week.
 </p></div>
 """,
         unsafe_allow_html=True,
@@ -1142,8 +1146,14 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
     force_cpr = st.button("🔍 Scan CPR", type="primary", key="cpr_force_scan")
 
     if not force_cpr and cached_cpr_df is not None and "cpr_results" not in st.session_state:
-        st.session_state["cpr_results"] = _normalize_cpr_results(cached_cpr_df)
+        seeded = _normalize_cpr_results(cached_cpr_df)
+        st.session_state["cpr_results"] = seeded
         st.session_state["cpr_scan_meta"] = cached_cpr_meta
+        tf_key = str(cached_cpr_meta.get("timeframe", "Daily"))
+        st.session_state.setdefault("cpr_results_by_tf", {})[tf_key] = seeded
+        st.session_state["cpr_scan_timeframe"] = tf_key
+
+    by_tf: dict[str, pd.DataFrame] = st.session_state.setdefault("cpr_results_by_tf", {})
 
     if force_cpr:
         progress = st.progress(0.0, text="Scanning CPR…")
@@ -1176,11 +1186,30 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
         st.session_state["cpr_results"] = _normalize_cpr_results(raw)
         st.session_state["cpr_scan_meta"] = saved_meta or scan_meta
         st.session_state["cpr_scan_timeframe"] = cpr_timeframe
+        by_tf[cpr_timeframe] = st.session_state["cpr_results"]
         if chart_symbols := raw["symbol"].astype(str).tolist() if "symbol" in raw.columns else []:
             prev_pick = st.session_state.get("cpr_chart_pick")
             if prev_pick not in chart_symbols:
                 st.session_state["cpr_chart_pick"] = chart_symbols[0]
         st.success(f"CPR scan complete — {len(raw)} symbols")
+
+    elif cpr_timeframe not in by_tf and (
+        st.session_state.get("cpr_results") is not None or cached_cpr_df is not None
+    ):
+        with st.spinner(f"Building {cpr_timeframe} CPR from cached prices…"):
+            raw = scan_cpr_universe(
+                scan_symbols,
+                use_cache=use_cache,
+                narrow_percentile=float(narrow_pct),
+                timeframe=cpr_timeframe,
+            )
+        by_tf[cpr_timeframe] = _normalize_cpr_results(raw)
+        st.session_state["cpr_results"] = by_tf[cpr_timeframe]
+        st.session_state["cpr_scan_timeframe"] = cpr_timeframe
+
+    elif cpr_timeframe in by_tf:
+        st.session_state["cpr_results"] = by_tf[cpr_timeframe]
+        st.session_state["cpr_scan_timeframe"] = cpr_timeframe
 
     results = st.session_state.get("cpr_results")
     if results is None or (isinstance(results, pd.DataFrame) and results.empty):
@@ -1190,15 +1219,9 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
             st.info("Click **Scan CPR** to build the Virgin CPR screener.")
         return
 
-    scan_tf = st.session_state.get("cpr_scan_timeframe", cached_cpr_meta.get("timeframe", "Daily"))
-    if scan_tf != cpr_timeframe:
-        st.warning(
-            f"Selected timeframe ({cpr_timeframe}) differs from cached scan ({scan_tf}). "
-            "Click **Scan CPR** to refresh."
-        )
-
     meta = st.session_state.get("cpr_scan_meta", cached_cpr_meta or {})
     results = _normalize_cpr_results(results)
+    scan_tf = cpr_timeframe
 
     results = apply_narrow_percentile(results, float(narrow_pct))
     scan_narrow_raw = meta.get("narrow_percentile")
@@ -1242,6 +1265,14 @@ Today's CPR from yesterday's OHLC. <strong>Virgin</strong> = price has not touch
         narrow_pct=narrow_pct,
         scanned_label=scanned_label,
     )
+
+    if not results.empty and "session_date" in results.columns:
+        latest_session = pd.to_datetime(results["session_date"], errors="coerce").max()
+        if pd.notna(latest_session) and latest_session.date() < date.today():
+            st.warning(
+                f"Latest price session in scan is **{latest_session.date()}**. "
+                "Uncheck **Use price cache** and click **Scan CPR** for today's data."
+            )
 
     display = _style_cpr_results(filtered)
 

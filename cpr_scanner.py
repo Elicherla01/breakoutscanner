@@ -38,7 +38,7 @@ def scan_symbol(
     return result
 
 
-def _result_to_row(result: VirginCPRResult) -> dict:
+def _result_to_row(result: VirginCPRResult, *, timeframe: str = "Daily") -> dict:
     return {
         "symbol": result.symbol,
         "status": result.status,
@@ -56,6 +56,7 @@ def _result_to_row(result: VirginCPRResult) -> dict:
         "days_virgin": result.days_virgin,
         "source_date": result.source_date,
         "session_date": result.session_date,
+        "timeframe": timeframe,
         "is_virgin": result.is_virgin,
         "is_narrow": result.width_class == "narrow",
     }
@@ -133,7 +134,7 @@ def scan_universe(
         )
         if result is None:
             continue
-        rows.append(_result_to_row(result))
+        rows.append(_result_to_row(result, timeframe=timeframe))
 
     if not rows:
         return pd.DataFrame()
@@ -147,6 +148,7 @@ def scan_universe(
     )
     df = df.drop(columns=["_sort"]).reset_index(drop=True)
     df["narrow_percentile_used"] = narrow_percentile
+    df["timeframe"] = timeframe
     return df
 
 

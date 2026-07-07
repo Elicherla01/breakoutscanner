@@ -100,12 +100,51 @@ def _scalar(row: pd.Series, col: str) -> float:
     return float(val)
 
 
-def build_cpr_width_history(daily: pd.DataFrame, max_sessions: int = WIDTH_HISTORY_DAYS) -> pd.Series:
-    """CPR width % series over the last year (one value per session, from prior bar OHLC)."""
-    if daily is None or len(daily) < 3:
-        return pd.Series(dtype=float)
+def _to_date(value: object) -> date:
+    if hasattr(value, "date"):
+        return value.date()
+    return pd.to_datetime(value).date()
+
+
+def _drop_incomplete_weekly(weekly: pd.DataFrame) -> pd.DataFrame:
+    """Drop the in-progress week (W-FRI label is Friday; skip if that week has not finished)."""
+    if weekly.empty or len(weekly) < 2:
+        return weekly
+    today = date.today()
+    last_end = _to_date(weekly.index[-1])
+    if last_end > today:
+        return weekly.iloc[:-1]
+    return weekly
+
+
+def _prepare_bars(daily: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Return OHLC bars for CPR scan: daily sessions or completed weekly bars."""
+    if daily is None or daily.empty:
+        return pd.DataFrame()
+
+    if timeframe == "Weekly":
+        weekly = resample_to_weekly(daily)
+        return _drop_incomplete_weekly(weekly)
 
     df = daily.sort_index().copy()
+    df.columns = [c.lower() for c in df.columns]
+    today = date.today()
+    # Drop any accidental future-dated rows from the feed.
+    df = df[df.index.map(_to_date) <= today]
+    return df.dropna(subset=["close"])
+
+
+def build_cpr_width_history(
+    bars: pd.DataFrame,
+    *,
+    timeframe: str = "Daily",
+    max_sessions: int = WIDTH_HISTORY_DAYS,
+) -> pd.Series:
+    """CPR width % series — one value per session, from the prior bar's OHLC."""
+    if bars is None or len(bars) < 3:
+        return pd.Series(dtype=float)
+
+    df = bars.sort_index().copy()
     df.columns = [c.lower() for c in df.columns]
     if max_sessions > 0:
         df = df.tail(max_sessions + 1)
@@ -113,9 +152,7 @@ def build_cpr_width_history(daily: pd.DataFrame, max_sessions: int = WIDTH_HISTO
     widths: list[float] = []
     for i in range(1, len(df)):
         prev = df.iloc[i - 1]
-        src = df.index[i - 1]
-        if hasattr(src, "date"):
-            src = src.date()
+        src = _to_date(df.index[i - 1])
         lv = compute_cpr(_scalar(prev, "high"), _scalar(prev, "low"), _scalar(prev, "close"), src)
         widths.append(lv.width_pct)
 
@@ -222,40 +259,36 @@ def scan_today_cpr(
     timeframe: str = "Daily",
 ) -> Optional[VirginCPRResult]:
     """
-    Scan today's CPR — levels from yesterday's OHLC applied to the latest session.
+    Scan CPR for the latest session.
 
-    Virgin: today's range has not touched yesterday's CPR zone [BC, TC].
+    Daily: CPR from the previous trading day's OHLC applied to the latest daily bar.
+    Weekly: CPR from the previous completed week's OHLC applied to the latest week.
     """
     if daily is None or len(daily) < 2:
         return None
 
-    df_to_use = resample_to_weekly(daily) if timeframe == "Weekly" else daily
-    if len(df_to_use) < 2:
+    df = _prepare_bars(daily, timeframe)
+    if len(df) < 2:
         return None
 
-    df = df_to_use.sort_index().copy()
     df.columns = [c.lower() for c in df.columns]
     required = {"open", "high", "low", "close"}
     if not required.issubset(df.columns):
         return None
 
-    prev = df.iloc[-2]
-    today = df.iloc[-1]
-    src_date = df.index[-2]
-    session_date = df.index[-1]
-    if hasattr(src_date, "date"):
-        src_date = src_date.date()
-    if hasattr(session_date, "date"):
-        session_date = session_date.date()
+    source_bar = df.iloc[-2]
+    session_bar = df.iloc[-1]
+    source_date = _to_date(df.index[-2])
+    session_date = _to_date(df.index[-1])
 
     levels = compute_cpr(
-        _scalar(prev, "high"),
-        _scalar(prev, "low"),
-        _scalar(prev, "close"),
-        src_date,
+        _scalar(source_bar, "high"),
+        _scalar(source_bar, "low"),
+        _scalar(source_bar, "close"),
+        source_date,
     )
 
-    width_history = build_cpr_width_history(df)
+    width_history = build_cpr_width_history(df, timeframe=timeframe)
     width_class, width_percentile, narrow_thr = classify_width_relative(
         levels.width_pct,
         width_history,
@@ -263,9 +296,9 @@ def scan_today_cpr(
         wide_percentile=wide_percentile,
     )
 
-    ltp = _scalar(today, "close")
+    ltp = _scalar(session_bar, "close")
     touched_today = cpr_zone_touched(
-        _scalar(today, "high"), _scalar(today, "low"), levels.tc, levels.bc
+        _scalar(session_bar, "high"), _scalar(session_bar, "low"), levels.tc, levels.bc
     )
     is_virgin = not touched_today
     days_virgin = _days_virgin_since_formed(df, len(df) - 1, levels.tc, levels.bc) if is_virgin else 0
@@ -287,7 +320,7 @@ def scan_today_cpr(
         width_percentile=round(width_percentile, 1),
         narrow_threshold_pct=round(narrow_thr, 3),
         days_virgin=days_virgin,
-        source_date=levels.source_date,
+        source_date=source_date,
         session_date=session_date,
         is_virgin=is_virgin,
         width_class=width_class,
@@ -295,20 +328,22 @@ def scan_today_cpr(
 
 
 def levels_for_chart(daily: pd.DataFrame, timeframe: str = "Daily") -> dict[str, float]:
-    """Today's CPR levels for chart overlay (from previous session)."""
+    """CPR levels for chart overlay (from previous session/week)."""
     if daily is None or len(daily) < 2:
         return {}
-    df_to_use = resample_to_weekly(daily) if timeframe == "Weekly" else daily
-    if len(df_to_use) < 2:
+    df = _prepare_bars(daily, timeframe)
+    if len(df) < 2:
         return {}
 
-    df = df_to_use.sort_index()
     df.columns = [c.lower() for c in df.columns]
-    prev = df.iloc[-2]
-    src = df.index[-2]
-    if hasattr(src, "date"):
-        src = src.date()
-    lv = compute_cpr(_scalar(prev, "high"), _scalar(prev, "low"), _scalar(prev, "close"), src)
+    source_bar = df.iloc[-2]
+    src = _to_date(df.index[-2])
+    lv = compute_cpr(
+        _scalar(source_bar, "high"),
+        _scalar(source_bar, "low"),
+        _scalar(source_bar, "close"),
+        src,
+    )
     return {
         "CPR HIGH (TC)": lv.tc,
         "CPR TC": lv.tc,
