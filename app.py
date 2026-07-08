@@ -10,10 +10,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from config import (
-    NARROW_PERCENTILE,
-    NARROW_PERCENTILE_MAX,
-    NARROW_PERCENTILE_MIN,
-    NARROW_PERCENTILE_PRESETS,
+    NARROW_CPR_PCT,
     STRICT_ATR_MULT,
     STRICT_VOL_MULT,
     TIMEFRAMES,
@@ -561,7 +558,7 @@ def _render_cpr_session_panel(
     html = f"""
 <div class="cpr-meta-panel">
   <strong>Last scanned {scanned_label}</strong> · Session {session_date} · {scan_tf} CPR · {universe_choice} ·
-  CPR from {cpr_from_label} · narrow = bottom {narrow_pct:g}% of 1Y width history ·
+  CPR from {cpr_from_label} · narrow ≤ {narrow_pct:g}% width · prev session + today only ·
   cached in <code>{results_csv}</code>
 </div>
 """
@@ -849,7 +846,8 @@ def _cpr_card_html(row: pd.Series) -> str:
         f"</div>"
         f'<div class="card-stat-row">{"".join(stats_row1)}</div>'
         f'<div class="card-stat-row">{"".join(stats_row2)}</div>'
-        f'<span class="card-foot">CPR from {source_date} (prev session) · Session {session_date} · {days_virgin}d virgin</span>'
+        f'<span class="card-foot">CPR from {source_date} (prev) · Session {session_date} · '
+        f'{"Virgin today" if days_virgin else "Touched today"}</span>'
         f"</div>"
     )
 
@@ -921,6 +919,10 @@ def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
         display["trend_icon"] = display["trend"].map(_CPR_TREND_ICONS).fillna("—")
     else:
         display["trend_icon"] = "—"
+    if "is_virgin" in display.columns:
+        display["virgin_today"] = display["is_virgin"].map(lambda x: "Yes" if x else "No")
+    else:
+        display["virgin_today"] = "—"
     display = display.drop(columns=["type"], errors="ignore")
     return display.rename(
         columns={
@@ -934,8 +936,7 @@ def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
             "bc": "BC",
             "pivot": "Pivot",
             "width_pct": "CPR Width %",
-            "width_percentile": "Width %ile",
-            "days_virgin": "Days Virgin",
+            "virgin_today": "Virgin Today",
             "source_date": "CPR From (prev)",
             "session_date": "Session",
         }
@@ -1003,47 +1004,30 @@ def _render_cpr_legend() -> None:
 
 
 def _render_narrow_cpr_controls(cached_meta: dict) -> float:
-    """Narrow CPR preset selector with optional custom percentile."""
-    saved = cached_meta.get("narrow_percentile")
-    default_pct = float(saved) if saved not in (None, "") else NARROW_PERCENTILE
-    preset_labels = [f"{int(p)}%" for p in NARROW_PERCENTILE_PRESETS] + ["Custom"]
-    default_preset = (
-        f"{int(default_pct)}%"
-        if default_pct in NARROW_PERCENTILE_PRESETS
-        else "Custom"
-    )
+    """Fixed CPR width % threshold for narrow classification (today's CPR only)."""
+    from config import NARROW_CPR_PCT, WIDE_CPR_PCT
 
-    st.markdown("##### Narrow CPR threshold")
-    preset = st.selectbox(
-        "Bottom percentile (narrowest widths)",
-        preset_labels,
-        index=preset_labels.index(default_preset) if default_preset in preset_labels else len(preset_labels) - 1,
-        key="cpr_narrow_preset",
+    saved = cached_meta.get("narrow_cpr_pct") or cached_meta.get("narrow_threshold_pct")
+    default_pct = float(saved) if saved not in (None, "") else NARROW_CPR_PCT
+
+    st.markdown("##### Narrow CPR width")
+    narrow_pct = st.number_input(
+        "Max width % for Narrow tag",
+        min_value=0.05,
+        max_value=2.0,
+        value=float(default_pct),
+        step=0.05,
+        format="%.2f",
+        key="cpr_narrow_width_pct",
         help=(
-            "Compare today's CPR width to each symbol's last 1-year history. "
-            "**Narrow** when width ranks in the bottom X% (e.g. 5% = narrowest 5% of past widths)."
+            "CPR is built from **yesterday's OHLC** and applied to **today's session** only. "
+            f"Width ≤ this % → **Narrow** (default {NARROW_CPR_PCT}%). "
+            f"Wide when ≥ {WIDE_CPR_PCT}%."
         ),
     )
-
-    if preset == "Custom":
-        st.session_state["cpr_narrow_custom_enabled"] = True
-        custom_default = int(default_pct) if default_pct not in NARROW_PERCENTILE_PRESETS else int(NARROW_PERCENTILE)
-        custom_pct = st.slider(
-            "Custom bottom percentile (%)",
-            int(NARROW_PERCENTILE_MIN),
-            int(NARROW_PERCENTILE_MAX),
-            min(max(custom_default, int(NARROW_PERCENTILE_MIN)), int(NARROW_PERCENTILE_MAX)),
-            1,
-            key="cpr_narrow_custom_pct",
-        )
-        narrow_pct = float(custom_pct)
-    else:
-        st.session_state["cpr_narrow_custom_enabled"] = False
-        narrow_pct = float(preset.rstrip("%"))
-
     st.caption(
-        f"Stocks with CPR width in the **bottom {narrow_pct:g}%** of their own 1-year history "
-        f"are tagged **Narrow** (V + N when also Virgin)."
+        f"**Narrow** when today's CPR width ≤ **{narrow_pct:g}%** · "
+        f"**Wide** when ≥ **{WIDE_CPR_PCT}%** · no historical width lookback."
     )
     return narrow_pct
 
@@ -1059,11 +1043,10 @@ def _render_cpr_table(display: pd.DataFrame) -> None:
             "Trend",
             "LTP",
             "CPR Width %",
-            "Width %ile",
             "TC",
             "BC",
             "Pivot",
-            "Days Virgin",
+            "Virgin Today",
             "CPR From (prev)",
             "Session",
         ]
@@ -1148,7 +1131,7 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
             "Narrow only",
             value=False,
             key="cpr_narrow_only",
-            help=f"Show only symbols in the bottom {narrow_pct:g}% narrow CPR bucket.",
+            help=f"Show only symbols with CPR width ≤ {narrow_pct:g}%.",
         )
     with f3:
         type_filter = st.multiselect(
@@ -1192,7 +1175,8 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
             "universe_sample": universe_sample,
             "universe_choice": universe_choice,
             "timeframe": cpr_timeframe,
-            "narrow_percentile": narrow_pct,
+            "narrow_cpr_pct": narrow_pct,
+            "narrow_percentile": narrow_pct,  # legacy cache key
         }
         save_cpr_results(raw, scan_meta)
         _, saved_meta = load_cpr_results(timeframe=cpr_timeframe)
@@ -1242,15 +1226,15 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
         )
 
     results = apply_narrow_percentile(results, float(narrow_pct))
-    scan_narrow_raw = meta.get("narrow_percentile")
+    scan_narrow_raw = meta.get("narrow_cpr_pct") or meta.get("narrow_percentile")
     try:
         scan_narrow = float(scan_narrow_raw) if scan_narrow_raw not in (None, "") else float(narrow_pct)
     except (TypeError, ValueError):
         scan_narrow = float(narrow_pct)
     if abs(scan_narrow - narrow_pct) > 0.01:
         st.info(
-            f"Narrow threshold changed to **bottom {narrow_pct:g}%** — "
-            "types updated instantly from cached width percentiles (no rescan needed)."
+            f"Narrow width threshold changed to **≤ {narrow_pct:g}%** — "
+            "types updated from cached CPR widths (no rescan needed)."
         )
     filtered = filter_cpr_results(
         results,

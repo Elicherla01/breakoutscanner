@@ -276,6 +276,11 @@ def scan_today_cpr(
     if not required.issubset(df.columns):
         return None
 
+    # Only previous session (CPR reference) + latest session (today)
+    df = df.tail(2)
+    if len(df) < 2:
+        return None
+
     source_bar = df.iloc[-2]
     session_bar = df.iloc[-1]
     source_date = _to_date(df.index[-2])
@@ -288,20 +293,16 @@ def scan_today_cpr(
         source_date,
     )
 
-    width_history = build_cpr_width_history(df, timeframe=timeframe)
-    width_class, width_percentile, narrow_thr = classify_width_relative(
-        levels.width_pct,
-        width_history,
-        narrow_percentile=narrow_percentile,
-        wide_percentile=wide_percentile,
-    )
+    width_class = classify_width_fixed(levels.width_pct)
+    width_percentile = float("nan")
+    narrow_thr = NARROW_CPR_PCT
 
     ltp = _scalar(session_bar, "close")
     touched_today = cpr_zone_touched(
         _scalar(session_bar, "high"), _scalar(session_bar, "low"), levels.tc, levels.bc
     )
     is_virgin = not touched_today
-    days_virgin = _days_virgin_since_formed(df, len(df) - 1, levels.tc, levels.bc) if is_virgin else 0
+    days_virgin = 1 if is_virgin else 0
 
     dist, virgin_level, trend = _signed_distance_pct(ltp, levels.tc, levels.bc)
 
@@ -317,7 +318,7 @@ def scan_today_cpr(
         tc=round(levels.tc, 2),
         bc=round(levels.bc, 2),
         width_pct=round(levels.width_pct, 3),
-        width_percentile=round(width_percentile, 1),
+        width_percentile=round(width_percentile, 1) if width_percentile == width_percentile else 0.0,
         narrow_threshold_pct=round(narrow_thr, 3),
         days_virgin=days_virgin,
         source_date=source_date,

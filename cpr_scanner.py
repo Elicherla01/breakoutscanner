@@ -7,9 +7,20 @@ from typing import Callable, Optional
 
 import pandas as pd
 
-from config import LOOKBACK_DAYS, NARROW_PERCENTILE, WIDE_PERCENTILE
+from config import (
+    CPR_LOOKBACK_DAYS,
+    CPR_WEEKLY_LOOKBACK_DAYS,
+    NARROW_CPR_PCT,
+    NARROW_PERCENTILE,
+    WIDE_CPR_PCT,
+    WIDE_PERCENTILE,
+)
 from cpr import VirginCPRResult, scan_today_cpr
 from data_loader import load_daily
+
+
+def _cpr_load_days(timeframe: str) -> int:
+    return CPR_WEEKLY_LOOKBACK_DAYS if timeframe == "Weekly" else CPR_LOOKBACK_DAYS
 
 
 def scan_symbol(
@@ -23,7 +34,8 @@ def scan_symbol(
 ) -> Optional[VirginCPRResult]:
     """Scan one symbol for today's CPR."""
     sym = symbol.upper()
-    df = daily if daily is not None else load_daily(sym, days=LOOKBACK_DAYS, use_cache=use_cache)
+    days = _cpr_load_days(timeframe)
+    df = daily if daily is not None else load_daily(sym, days=days, use_cache=use_cache)
     if df is None or df.empty:
         return None
     result = scan_today_cpr(
@@ -67,16 +79,18 @@ def apply_narrow_percentile(
     narrow_percentile: float,
     wide_percentile: float = WIDE_PERCENTILE,
 ) -> pd.DataFrame:
-    """Reclassify narrow/wide types when the user changes the percentile slider."""
-    if df.empty or "width_percentile" not in df.columns:
+    """Re-tag narrow/wide using CPR width % thresholds (prev session CPR only)."""
+    narrow_thr = float(narrow_percentile)
+    wide_thr = float(wide_percentile)
+    if df.empty:
         out = df.copy()
         if not out.empty and "is_narrow" not in out.columns:
             out["is_narrow"] = False
         return out
 
     out = df.copy()
-    out["is_narrow"] = out["width_percentile"] <= narrow_percentile
-    is_wide = out["width_percentile"] >= wide_percentile
+    out["is_narrow"] = out["width_pct"] <= narrow_thr
+    is_wide = out["width_pct"] >= wide_thr
 
     def _type(row: pd.Series) -> str:
         if row["is_virgin"]:
@@ -92,7 +106,7 @@ def apply_narrow_percentile(
         return "TOUCHED"
 
     out["type"] = out.apply(_type, axis=1)
-    out["narrow_percentile_used"] = narrow_percentile
+    out["narrow_threshold_pct"] = narrow_thr
     return out
 
 
@@ -109,7 +123,7 @@ def scan_universe(
     total = len(symbols)
 
     def _load(sym: str) -> tuple[str, pd.DataFrame]:
-        return sym, load_daily(sym, days=LOOKBACK_DAYS, use_cache=use_cache)
+        return sym, load_daily(sym, days=_cpr_load_days(timeframe), use_cache=use_cache)
 
     data: dict[str, pd.DataFrame] = {}
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -143,11 +157,10 @@ def scan_universe(
     type_order = {"V+W": 0, "V+N": 1, "V": 2, "WIDE": 3, "NARROW": 4, "TOUCHED": 5, "—": 6}
     df["_sort"] = df["type"].map(type_order).fillna(9)
     df = df.sort_values(
-        ["is_virgin", "is_narrow", "_sort", "width_percentile"],
+        ["is_virgin", "is_narrow", "_sort", "width_pct"],
         ascending=[False, False, True, True],
     )
     df = df.drop(columns=["_sort"]).reset_index(drop=True)
-    df["narrow_percentile_used"] = narrow_percentile
     df["timeframe"] = timeframe
     return df
 

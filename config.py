@@ -47,8 +47,12 @@ def cpr_scan_paths(timeframe: str) -> tuple[Path, Path, Path]:
 
 LOOKBACK_DAYS = 400
 
-# CPR width — relative to each instrument's own 1-year history
-WIDTH_HISTORY_DAYS = 365
+# CPR scanner — only previous session + today (minimal fetch through weekends)
+CPR_LOOKBACK_DAYS = 14
+CPR_WEEKLY_LOOKBACK_DAYS = 28
+
+# CPR width — fixed % thresholds (no multi-day history)
+WIDTH_HISTORY_DAYS = 365  # legacy; CPR scanner uses fixed thresholds only
 NARROW_PERCENTILE = 5.0
 WIDE_PERCENTILE = 97.0
 NARROW_CPR_PCT = 0.35
