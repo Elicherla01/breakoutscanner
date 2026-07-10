@@ -738,7 +738,7 @@ def _chart(symbol: str, timeframe: str, level: float) -> go.Figure:
         fig.update_layout(title=f"{symbol} — no data")
         return fig
 
-    tail_n = {"1H": 120, "1D": 120, "1W": 52}.get(timeframe.upper(), 100)
+    tail_n = {"1H": 120, "1D": 120, "1W": 52, "1M": 36}.get(timeframe.upper(), 100)
     tail = df.tail(tail_n)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.72, 0.28], vertical_spacing=0.04)
 
@@ -1512,7 +1512,7 @@ padding:1.2rem 1.5rem;border-radius:12px;margin-bottom:1rem;">
 <h2 style="color:white;margin:0;">🚀 NIFTY 500 Breakout Scanner</h2>
 <p style="color:#e2e8f0;margin:0.4rem 0 0;">
 Donchian breakouts with volume confirmation on <strong>1 Hour</strong>, <strong>1 Day</strong>,
-and <strong>1 Week</strong> timeframes — plus <strong>Virgin CPR</strong> screening.
+<strong>1 Week</strong> and <strong>1 Month</strong> timeframes — plus <strong>Virgin CPR</strong> screening.
 </p></div>
 """,
     unsafe_allow_html=True,
@@ -1575,7 +1575,7 @@ with st.sidebar:
     selected_tfs = st.multiselect(
         "Timeframes",
         options=list(TIMEFRAME_ORDER),
-        default=["1H", "1D", "1W"],
+        default=["1H", "1D", "1W", "1M"],
         format_func=lambda k: TIMEFRAMES[k].label,
     )
     selected_tfs = sort_timeframes(selected_tfs)
@@ -1592,7 +1592,7 @@ with st.sidebar:
         disabled=breakout_mode != "strict",
         help="Breakout bar true range must exceed this multiple of 14-bar ATR.",
     )
-    only_52w = st.checkbox("52-week high breakouts only (1D/1W)", value=False)
+    only_52w = st.checkbox("52-week high breakouts only (1D/1W/1M)", value=False)
     use_cache = st.checkbox("Use price cache", value=True)
     if breakout_mode == "strict":
         st.caption(
@@ -1602,7 +1602,7 @@ with st.sidebar:
     else:
         st.caption(
             "Standard: close > prior N-bar high/low + volume surge + strong close. "
-            "Weekly bars from daily data (Fri close)."
+            "Weekly (Fri close) and monthly bars resampled from daily data."
         )
 
     _render_disclaimer_sidebar()

@@ -1,6 +1,6 @@
 # NIFTY 500 Breakout Scanner
 
-A multi-timeframe stock breakout scanner for **NIFTY 500** constituents. Detects Donchian-style resistance/support breaks with volume confirmation on **1 Hour**, **1 Day**, and **1 Week** bars.
+A multi-timeframe stock breakout scanner for **NIFTY 500** constituents. Detects Donchian-style resistance/support breaks with volume confirmation on **1 Hour**, **1 Day**, **1 Week**, and **1 Month** bars.
 
 Built with Python, [yfinance](https://github.com/ranaroussi/yfinance), and [Streamlit](https://streamlit.io/).
 
@@ -10,7 +10,7 @@ Built with Python, [yfinance](https://github.com/ranaroussi/yfinance), and [Stre
 
 ## Screenshot
 
-Streamlit dashboard — sidebar scan settings, force-refresh cache, and card view of bullish/bearish breakouts across 1H / 1D / 1W.
+Streamlit dashboard — sidebar scan settings, force-refresh cache, and card view of bullish/bearish breakouts across 1H / 1D / 1W / 1M.
 
 ![NIFTY 500 Breakout Scanner dashboard](docs/images/dashboard-screenshot.png)
 
@@ -18,7 +18,7 @@ Streamlit dashboard — sidebar scan settings, force-refresh cache, and card vie
 
 ## Features
 
-- **Three timeframes:** 1H (yfinance hourly), 1D (daily), 1W (weekly resampled from daily)
+- **Four timeframes:** 1H (yfinance hourly), 1D (daily), 1W (weekly resampled from daily), 1M (monthly resampled from ~6 years of daily)
 - **Two detection modes:**
   - **Standard** — Donchian break + volume surge + strong close
   - **Strict (ATR)** — Standard rules + true range > ATR multiplier × ATR(14)

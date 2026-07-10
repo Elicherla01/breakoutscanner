@@ -1,4 +1,4 @@
-"""Price loading for NIFTY 500 breakout scanner (1H / 1D / 1W)."""
+"""Price loading for NIFTY 500 breakout scanner (1H / 1D / 1W / 1M)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from config import (
     DEFAULT_WATCHLIST,
     HOURLY_PERIOD,
     LOOKBACK_DAYS,
+    MONTHLY_LOOKBACK_DAYS,
     NIFTY50_CACHE,
     NIFTY50_CACHE_SIBLING,
     NIFTY50_URL,
@@ -232,25 +233,44 @@ def fetch_hourly(symbol: str, period: str = HOURLY_PERIOD) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+_OHLCV_AGG = {
+    "open": "first",
+    "high": "max",
+    "low": "min",
+    "close": "last",
+    "volume": "sum",
+}
+
+
 def resample_weekly(daily: pd.DataFrame) -> pd.DataFrame:
     if daily.empty:
         return daily
-    weekly = daily.resample("W-FRI").agg(
-        {
-            "open": "first",
-            "high": "max",
-            "low": "min",
-            "close": "last",
-            "volume": "sum",
-        }
-    )
+    weekly = daily.resample("W-FRI").agg(_OHLCV_AGG)
     return weekly.dropna(subset=["close"])
+
+
+def resample_monthly(daily: pd.DataFrame) -> pd.DataFrame:
+    if daily.empty:
+        return daily
+    monthly = daily.resample("ME").agg(_OHLCV_AGG)
+    monthly = monthly.dropna(subset=["close"])
+    # Extrapolate the in-progress month's volume to a full-month estimate so
+    # the volume-surge filter is comparable with completed months (a month has
+    # ~21 trading sessions; without this, a mid-month scan can never fire).
+    if len(monthly) >= 2 and "volume" in monthly.columns:
+        last_start = monthly.index[-1].to_period("M").start_time
+        elapsed = int((daily.index >= last_start).sum())
+        if 0 < elapsed < 18:
+            vol_col = monthly.columns.get_loc("volume")
+            monthly.iloc[-1, vol_col] = monthly.iloc[-1, vol_col] * 21.0 / elapsed
+    return monthly
 
 
 def load_daily(symbol: str, days: int = LOOKBACK_DAYS, use_cache: bool = True) -> pd.DataFrame:
     sym = symbol.upper()
     path = CACHE_DAILY / f"{sym}.csv"
-    min_rows = min(60, days // 3)
+    # Deep requests (monthly bars) must not be satisfied by a short cached file
+    min_rows = min(60, days // 3) if days <= 500 else int(days * 0.45)
 
     if use_cache and path.is_file():
         try:
@@ -298,10 +318,13 @@ def load_bars(
     use_cache: bool = True,
     days: int = LOOKBACK_DAYS,
 ) -> pd.DataFrame:
-    """Return OHLCV for the requested timeframe key: 1H, 1D, 1W."""
+    """Return OHLCV for the requested timeframe key: 1H, 1D, 1W, 1M."""
     tf = timeframe.upper()
     if tf == "1H":
         return load_hourly(symbol, use_cache=use_cache)
+    if tf == "1M":
+        daily = load_daily(symbol, days=max(days, MONTHLY_LOOKBACK_DAYS), use_cache=use_cache)
+        return resample_monthly(daily)
     daily = load_daily(symbol, days=days, use_cache=use_cache)
     if tf == "1W":
         return resample_weekly(daily)

@@ -54,7 +54,7 @@ def scan_universe(
     direction_filter: Optional[BreakoutDirection] = None,
     max_workers: int = 8,
 ) -> pd.DataFrame:
-    """Scan symbols across one or more timeframes (1H, 1D, 1W)."""
+    """Scan symbols across one or more timeframes (1H, 1D, 1W, 1M)."""
     symbols = [s.upper() for s in symbols]
     timeframes = sort_timeframes(timeframes)
     rows: list[dict] = []
@@ -97,7 +97,7 @@ def scan_universe(
 
     df = pd.DataFrame(rows)
     dir_order = {"bullish": 0, "bearish": 1}
-    tf_order = {"1H": 0, "1D": 1, "1W": 2}
+    tf_order = {"1H": 0, "1D": 1, "1W": 2, "1M": 3}
     df["_dir"] = df["direction"].map(dir_order).fillna(9)
     df["_tf"] = df["timeframe"].map(tf_order).fillna(9)
     df = df.sort_values(

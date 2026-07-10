@@ -174,10 +174,12 @@ def detect_breakout(
     vol_ratio = vol / avg_vol if avg_vol > 0 else float("nan")
 
     is_52w = False
-    if tf in ("1D", "1W") and len(hist) >= 252:
-        window = 52 if tf == "1W" else 252
-        prior_high = float(hist["high"].iloc[-window - 1 : -1].max())
-        is_52w = direction == "bullish" and float(bar["close"]) >= prior_high
+    windows_52w = {"1D": 252, "1W": 52, "1M": 12}
+    if tf in windows_52w:
+        window = windows_52w[tf]
+        if len(hist) > window:
+            prior_high = float(hist["high"].iloc[-window - 1 : -1].max())
+            is_52w = direction == "bullish" and float(bar["close"]) >= prior_high
 
     return BreakoutResult(
         symbol=symbol.upper(),

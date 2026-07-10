@@ -46,6 +46,8 @@ def cpr_scan_paths(timeframe: str) -> tuple[Path, Path, Path]:
     )
 
 LOOKBACK_DAYS = 400
+# Monthly bars need much deeper daily history (60-bar Donchian max + ATR warmup)
+MONTHLY_LOOKBACK_DAYS = 1500
 
 # CPR scanner — only previous session + today (minimal fetch through weekends)
 CPR_LOOKBACK_DAYS = 14
@@ -165,11 +167,21 @@ TIMEFRAMES: dict[str, TimeframeConfig] = {
         atr_period=14,
         atr_mult=1.2,
     ),
+    "1M": TimeframeConfig(
+        label="1 Month",
+        lookback=6,
+        vol_lookback=6,
+        min_bars=24,
+        vol_mult=1.10,
+        strong_close_pct=0.55,
+        atr_period=12,
+        atr_mult=1.2,
+    ),
 }
 
 
 # Canonical display / scan order
-TIMEFRAME_ORDER: tuple[str, ...] = ("1H", "1D", "1W")
+TIMEFRAME_ORDER: tuple[str, ...] = ("1H", "1D", "1W", "1M")
 
 
 def sort_timeframes(timeframes: list[str] | tuple[str, ...]) -> list[str]:

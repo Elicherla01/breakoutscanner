@@ -31,7 +31,7 @@ def main() -> int:
         "-t",
         action="append",
         choices=list(TIMEFRAMES.keys()),
-        help="Timeframe(s): 1H, 1D, 1W (repeatable)",
+        help="Timeframe(s): 1H, 1D, 1W, 1M (repeatable)",
     )
     scan.add_argument("--max", type=int, default=500, help="Max symbols for NIFTY 500 (even sample if < size)")
     scan.add_argument(
