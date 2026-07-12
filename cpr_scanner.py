@@ -47,6 +47,12 @@ def scan_symbol(
     if result is None:
         return None
     result.symbol = sym
+    if timeframe == "Daily":
+        try:
+            from cpr_ml_engine import predict_cpr_trending_confidence
+            result.ml_trend_confidence = predict_cpr_trending_confidence(sym, df)
+        except Exception:
+            pass
     return result
 
 
@@ -71,6 +77,7 @@ def _result_to_row(result: VirginCPRResult, *, timeframe: str = "Daily") -> dict
         "timeframe": timeframe,
         "is_virgin": result.is_virgin,
         "is_narrow": result.width_class == "narrow",
+        "ml_trend_confidence": result.ml_trend_confidence,
     }
 
 

@@ -901,6 +901,12 @@ def _cpr_card_html(row: pd.Series) -> str:
     if cpr_type in ("V+W", "V+N", "WIDE", "NARROW") and status_rate != cpr_type.replace("+", " + "):
         badges.insert(0, f'<span class="card-pill">{cpr_type.replace("+", " + ")}</span>')
 
+    ml_conf = row.get("ml_trend_confidence")
+    if ml_conf is not None and pd.notna(ml_conf):
+        badges.append(
+            f'<span class="card-pill ml-conf" style="background: rgba(37,99,235,0.25); color: #bfdbfe; font-weight: bold;">ML Trend: {float(ml_conf):.0f}%</span>'
+        )
+
     stats_row1 = [
         f'<span class="card-stat">LTP <b>{ltp_txt}</b></span>',
         f'<span class="card-stat">Distance <b>{dist_txt}</b></span>',
@@ -998,6 +1004,12 @@ def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
         display["virgin_today"] = display["is_virgin"].map(lambda x: "Yes" if x else "No")
     else:
         display["virgin_today"] = "—"
+    if "ml_trend_confidence" in display.columns:
+        display["ml_conf"] = display["ml_trend_confidence"].map(
+            lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
+        )
+    else:
+        display["ml_conf"] = "—"
     display = display.drop(columns=["type"], errors="ignore")
     return display.rename(
         columns={
@@ -1006,6 +1018,7 @@ def _style_cpr_results(df: pd.DataFrame) -> pd.DataFrame:
             "virgin_status": "Type",
             "distance": "Distance",
             "trend_icon": "Trend",
+            "ml_conf": "ML Trend Confidence",
             "ltp": "LTP",
             "tc": "TC",
             "bc": "BC",
@@ -1116,6 +1129,7 @@ def _render_cpr_table(display: pd.DataFrame) -> None:
             "Type",
             "Distance",
             "Trend",
+            "ML Trend Confidence",
             "LTP",
             "CPR Width %",
             "TC",
@@ -1845,16 +1859,21 @@ with st.sidebar:
             "Weekly (Fri close) and monthly bars resampled from daily data."
         )
 
-    st.divider()
-    st.header("ML Confidence Model")
-    if st.button("Train ML Model", use_container_width=True, help="Re-trains the Random Forest breakout classifier on watchlist stock history."):
+    st.header("ML Confidence Models")
+    if st.button("Train ML Models", use_container_width=True, help="Re-trains both the Random Forest breakout classifier and the CPR trending day predictor on stock histories."):
         from ml_engine import train_confidence_model
-        with st.spinner("Training model on historical breakouts..."):
-            model = train_confidence_model(use_cache=False)
-            if model is not None:
-                st.success("Model trained and cached successfully!")
+        from cpr_ml_engine import train_cpr_confidence_model
+        with st.spinner("Training ML Models..."):
+            m_breakout = train_confidence_model(use_cache=False)
+            m_cpr = train_cpr_confidence_model(use_cache=False)
+            if m_breakout is not None and m_cpr is not None:
+                st.success("Both Breakout and CPR models trained successfully!")
+            elif m_breakout is not None:
+                st.warning("Breakout model trained, but CPR model failed.")
+            elif m_cpr is not None:
+                st.warning("CPR model trained, but Breakout model failed.")
             else:
-                st.error("Failed to train model (insufficient historical breakouts found).")
+                st.error("Failed to train models.")
 
     _render_disclaimer_sidebar()
 

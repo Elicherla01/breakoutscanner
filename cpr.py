@@ -66,6 +66,7 @@ class VirginCPRResult:
     session_date: date
     is_virgin: bool
     width_class: WidthType
+    ml_trend_confidence: Optional[float] = None
 
 
 def compute_cpr(high: float, low: float, close: float, source_date: date) -> CPRLevels:
