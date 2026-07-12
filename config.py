@@ -36,6 +36,27 @@ CPR_SCAN_INFO_CSV = DATA_DIR / "cpr_scan_info.csv"
 CPR_SCAN_META_JSON = DATA_DIR / "cpr_scan_meta.json"
 CPR_TIMEFRAMES: tuple[str, ...] = ("Daily", "Weekly")
 
+# Mean Reversion scanner
+MR_SCAN_RESULTS_CSV = DATA_DIR / "mr_scan_results.csv"
+MR_SCAN_INFO_CSV = DATA_DIR / "mr_scan_info.csv"
+MR_SCAN_META_JSON = DATA_DIR / "mr_scan_meta.json"
+MR_COMPRESSION_THRESHOLD = 6.0
+MR_MIN_BARS = 1
+MR_MIN_SPREAD_PCT = 5.0
+MR_COMPRESSION_MIN = 2.0
+MR_COMPRESSION_MAX = 10.0
+MR_COMPRESSION_DEFAULT_LOW = 2.0
+MR_COMPRESSION_DEFAULT_HIGH = 6.0
+
+MR_MIN_BARS_1H = 15
+MR_MIN_BARS_1D = 100
+MR_MIN_BARS_1W = 78
+MR_MIN_BARS_BY_TF: dict[str, int] = {
+    "1H": MR_MIN_BARS_1H,
+    "1D": MR_MIN_BARS_1D,
+    "1W": MR_MIN_BARS_1W,
+}
+
 
 def cpr_scan_paths(timeframe: str) -> tuple[Path, Path, Path]:
     """Per-timeframe CPR cache paths: results CSV, info CSV, meta JSON."""

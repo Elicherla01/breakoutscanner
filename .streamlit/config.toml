@@ -1,0 +1,21 @@
+[server]
+# Listen on all interfaces so Docker can forward the port
+address = "0.0.0.0"
+port = 8550
+
+# Headless = true suppresses the "please wait…" browser-open prompt
+# and makes the app suitable for running inside a container
+headless = true
+
+# Disable file-watcher (not useful inside a container, saves CPU)
+runOnSave = false
+fileWatcherType = "none"
+
+[browser]
+# Do not try to open a browser from inside the container
+serverAddress = "localhost"
+gatherUsageStats = false
+
+[theme]
+# Optional: keeps the UI consistent regardless of host OS settings
+base = "dark"
