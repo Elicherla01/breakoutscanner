@@ -4,3 +4,4 @@ yfinance>=0.2.40
 streamlit>=1.30
 plotly>=5.18
 scipy>=1.11
+scikit-learn
