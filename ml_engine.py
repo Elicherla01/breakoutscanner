@@ -16,7 +16,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 
-from config import DATA_DIR, DEFAULT_WATCHLIST
+from config import DATA_DIR, DEFAULT_WATCHLIST, CACHE_DAILY
 from breakout import detect_breakout
 
 MODEL_PATH = DATA_DIR / "breakout_ml_model.pkl"
@@ -69,7 +69,7 @@ def get_market_regime_classification(lookback_days: int = 365) -> dict:
     """
     try:
         # Download Nifty index data
-        nifty = yf.download("^NSEI", period="2y", progress=False)
+        nifty = yf.download("^NSEI", period="2y", progress=False, timeout=2.0)
         if nifty.empty:
             return {"name": "Unknown", "desc": "No market data available.", "color": "#9aa0a6"}
         
@@ -256,13 +256,25 @@ def train_confidence_model(use_cache: bool = True) -> RandomForestClassifier | N
 
     # Load bars for watchlist symbols to compile training data
     all_records = []
+    failed_downloads = 0
     for symbol in DEFAULT_WATCHLIST:
+        if failed_downloads >= 3:
+            # yfinance/network appears rate-limited or blocked, stop sequential attempts
+            break
         try:
-            # Load daily bars (1D)
-            ticker_ns = f"{symbol}.NS"
-            df = yf.download(ticker_ns, period="2y", progress=False)
+            path = CACHE_DAILY / f"{symbol.upper()}.csv"
+            df = pd.DataFrame()
+            if path.is_file():
+                try:
+                    df = pd.read_csv(path, parse_dates=["date"], index_col="date")
+                except Exception:
+                    pass
             if df.empty:
-                continue
+                ticker_ns = f"{symbol}.NS"
+                df = yf.download(ticker_ns, period="2y", progress=False, timeout=2.0)
+                if df.empty:
+                    failed_downloads += 1
+                    continue
             
             df = _flatten_yfinance_cols(df)
             recs = extract_historical_breakouts(symbol, df, "1D")
