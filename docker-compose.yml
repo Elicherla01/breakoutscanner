@@ -1,0 +1,24 @@
+services:
+  breakout-scanner:
+    build: .
+    container_name: nifty500-breakout-scanner
+    ports:
+      - "8550:8550"
+    volumes:
+      # Persist downloaded price data and scan results between container restarts
+      - scanner_data:/app/data_cache
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8550/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  scanner_data:
+    # Named volume — Docker manages it; survives container stop/remove
+    # To wipe cached data: docker volume rm nifty500-breakout-scanner_scanner_data

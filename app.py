@@ -10,6 +10,11 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from config import (
+    MR_COMPRESSION_DEFAULT_HIGH,
+    MR_COMPRESSION_DEFAULT_LOW,
+    MR_COMPRESSION_MAX,
+    MR_COMPRESSION_MIN,
+    MR_MIN_BARS_BY_TF,
     NARROW_CPR_PCT,
     STRICT_ATR_MULT,
     STRICT_VOL_MULT,
@@ -27,13 +32,18 @@ from cpr import levels_for_chart
 from cpr_scanner import apply_narrow_percentile, filter_results as filter_cpr_results, scan_universe as scan_cpr_universe
 from data_loader import load_bars, load_daily, load_universe_symbols, resolve_universe_symbols
 from fno_loader import fno_symbol_set, load_fno_symbols
+from mean_reversion import levels_for_chart as mr_levels_for_chart, compute_emas
+from mean_reversion_scanner import filter_results as filter_mr_results, scan_universe as scan_mr_universe
 from results_store import (
     cached_cpr_scan_available,
+    cached_mr_scan_available,
     cached_scan_available,
     format_scanned_at,
     load_cpr_results,
+    load_mr_results,
     load_scan_results,
     save_cpr_results,
+    save_mr_results,
     save_scan_results,
 )
 from scanner import filter_results, scan_universe
@@ -1858,7 +1868,337 @@ with st.sidebar:
 
     _render_disclaimer_sidebar()
 
-tab_breakout, tab_cpr = st.tabs(["Breakout Scanner", "CPR Scanner"])
+
+# ---------------------------------------------------------------------------
+# Mean Reversion tab
+# ---------------------------------------------------------------------------
+
+def _mr_chart(symbol: str, timeframe: str = "1D", compression_threshold: float = 6.0):
+    """Candlestick chart with 4 EMAs and compression zone overlay."""
+    bars = load_bars(symbol, timeframe, use_cache=True)
+    if bars is None or bars.empty:
+        return go.Figure()
+
+    ema_df = compute_emas(bars)
+    ema_df = ema_df.dropna(subset=["ema200"])
+    if ema_df.empty:
+        return go.Figure()
+
+    from mean_reversion import find_compression_zone_full, consolidation_range
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        vertical_spacing=0.03, row_heights=[0.8, 0.2],
+    )
+
+    fig.add_trace(
+        go.Candlestick(
+            x=ema_df.index, open=ema_df["open"], high=ema_df["high"],
+            low=ema_df["low"], close=ema_df["close"], name=symbol,
+            increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+        ),
+        row=1, col=1,
+    )
+
+    colors = {"ema20": "#ef5350", "ema50": "#2196f3", "ema100": "#e040fb", "ema200": "#ffffff"}
+    names = {"ema20": "EMA 20", "ema50": "EMA 50", "ema100": "EMA 100", "ema200": "EMA 200"}
+    for col, color in colors.items():
+        fig.add_trace(
+            go.Scatter(x=ema_df.index, y=ema_df[col], mode="lines",
+                       line=dict(color=color, width=1.2), name=names[col]),
+            row=1, col=1,
+        )
+
+    zone = find_compression_zone_full(ema_df, compression_threshold)
+    if zone is not None:
+        start_idx, end_idx, _ = zone
+        ch, cl = consolidation_range(ema_df, start_idx, end_idx)
+        zone_dates = ema_df.index[start_idx : end_idx + 1]
+        fig.add_hrect(
+            y0=cl, y1=ch, fillcolor="rgba(255,235,59,0.15)",
+            line=dict(color="rgba(255,235,59,0.5)", width=1, dash="dot"),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=[zone_dates[0], zone_dates[-1]], y=[ch, ch],
+                       mode="lines", line=dict(color="#fbc02d", width=1, dash="dash"),
+                       name="Cons. High"),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=[zone_dates[0], zone_dates[-1]], y=[cl, cl],
+                       mode="lines", line=dict(color="#fbc02d", width=1, dash="dash"),
+                       name="Cons. Low"),
+            row=1, col=1,
+        )
+
+    if "volume" in ema_df.columns:
+        colors_vol = ["#26a69a" if c >= o else "#ef5350"
+                      for c, o in zip(ema_df["close"], ema_df["open"])]
+        fig.add_trace(
+            go.Bar(x=ema_df.index, y=ema_df["volume"], marker_color=colors_vol,
+                   name="Volume", showlegend=False),
+            row=2, col=1,
+        )
+
+    fig.update_layout(
+        template="plotly_dark", height=600,
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=50, r=20, t=30, b=30),
+    )
+    fig.update_xaxes(type="category", nticks=30, row=2, col=1)
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
+    return fig
+
+
+def _render_mr_summary_metrics(*, total, event_long, event_short, location, scanned_label):
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total", total)
+    c2.metric("Event Long", event_long, delta=None)
+    c3.metric("Event Short", event_short, delta=None)
+    c4.metric("Location (Watching)", location)
+    c5.metric("Last scanned", scanned_label)
+
+
+def render_mean_reversion_tab(
+    scan_symbols,
+    *,
+    universe_choice="",
+    universe_total=0,
+    universe_sample=False,
+):
+    st.markdown("### Mean Reversion Scanner")
+    st.caption("EMA Compression & Gate Chronology Analysis — 1H / 1D / 1W")
+
+    cached_mr_df, cached_mr_meta = load_mr_results()
+    mr_meta = cached_mr_meta or {}
+
+    c1, c2 = st.columns(2)
+    with c1:
+        mr_timeframes = st.multiselect("Timeframes", ["1H", "1D", "1W"], default=["1D"], key="mr_timeframes")
+    with c2:
+        st.metric("Symbols in scan", len(scan_symbols))
+
+    st.subheader("Compression Settings")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        compression_low = st.slider("Compression low %", MR_COMPRESSION_MIN, MR_COMPRESSION_MAX,
+                                    MR_COMPRESSION_DEFAULT_LOW, 0.5, key="mr_compression_low")
+    with col_b:
+        compression_high = st.slider("Compression high %", MR_COMPRESSION_MIN, MR_COMPRESSION_MAX,
+                                     MR_COMPRESSION_DEFAULT_HIGH, 0.5, key="mr_compression_high")
+
+    tf_correction_info = []
+    for tf in ["1H", "1D", "1W"]:
+        if tf in mr_timeframes:
+            bars = MR_MIN_BARS_BY_TF.get(tf, "?")
+            labels = {"1H": "~21 calendar days", "1D": "~5-6 months", "1W": "~1.5-2 years"}
+            tf_correction_info.append(f"**{tf}**: min {bars} bars ({labels.get(tf, '')})")
+    if tf_correction_info:
+        st.caption("Time correction: " + " . ".join(tf_correction_info))
+
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        mr_dir_filter = st.multiselect("Direction", ["long", "short"],
+                                        default=["long", "short"], key="mr_dir_filter")
+    with f2:
+        mr_status_filter = st.multiselect("Status", ["location", "event_long", "event_short"],
+                                           default=["location", "event_long", "event_short"], key="mr_status_filter")
+    with f3:
+        mr_setup_filter = st.multiselect("Setup type", ["fresh", "continuation"],
+                                          default=["fresh", "continuation"], key="mr_setup_filter")
+    with f4:
+        mr_alignment_only = st.checkbox("Alignment OK only", value=False, key="mr_alignment_only")
+
+    use_cache_mr = st.checkbox("Use price cache", value=True, key="mr_use_cache")
+    force_mr = st.button("Scan Mean Reversion", type="primary", key="mr_force_scan")
+
+    if not force_mr and cached_mr_df is not None and "mr_results" not in st.session_state:
+        st.session_state["mr_results"] = cached_mr_df
+        st.session_state["mr_scan_meta"] = cached_mr_meta
+
+    if force_mr:
+        if not mr_timeframes:
+            st.warning("Select at least one timeframe.")
+            return
+
+        st.caption(f"Scanning **{len(scan_symbols)}** symbols across **{', '.join(mr_timeframes)}** | Compression ≤ {compression_high}%")
+        progress = st.progress(0.0, text="Loading prices...")
+        status_box = st.empty()
+
+        def on_mr_progress(done, total, label):
+            progress.progress(done / max(total, 1), text=f"Scanning {label} ({done}/{total})...")
+
+        with st.spinner("Scanning Mean Reversion setups..."):
+            try:
+                raw = scan_mr_universe(
+                    scan_symbols, mr_timeframes,
+                    progress_callback=on_mr_progress,
+                    use_cache=use_cache_mr,
+                    compression_threshold=compression_high,
+                )
+            except Exception as exc:
+                st.error(f"Mean Reversion scan failed: {exc}")
+                import traceback
+                st.code(traceback.format_exc())
+                return
+        progress.progress(1.0, text="Done")
+
+        if raw is not None and not raw.empty:
+            st.success(f"Mean Reversion scan complete — {len(raw)} setups found")
+        elif raw is not None:
+            st.warning("Scan returned empty results (0 setups).")
+        else:
+            st.error("Scan returned None.")
+            return
+
+        try:
+            scan_meta = {
+                "symbols": len(scan_symbols),
+                "universe_total": universe_total,
+                "universe_sample": universe_sample,
+                "universe_choice": universe_choice,
+                "timeframes": mr_timeframes,
+                "compression_threshold": compression_high,
+            }
+            save_mr_results(raw, scan_meta)
+            _, saved_meta = load_mr_results()
+            st.session_state["mr_results"] = raw
+            st.session_state["mr_scan_meta"] = saved_meta or scan_meta
+            if "symbol" in raw.columns:
+                chart_syms = raw["symbol"].astype(str).tolist()
+                if chart_syms:
+                    st.session_state["mr_chart_pick"] = chart_syms[0]
+        except Exception as exc:
+            st.error(f"Failed to save results: {exc}")
+            import traceback
+            st.code(traceback.format_exc())
+
+    results = st.session_state.get("mr_results")
+    if results is None or (isinstance(results, pd.DataFrame) and results.empty):
+        if cached_mr_scan_available():
+            st.info("Cached Mean Reversion results available. Click **Scan Mean Reversion** to refresh.")
+        else:
+            st.info("No cached results. Click **Scan Mean Reversion** to start.")
+        return
+
+    if isinstance(results, pd.DataFrame):
+        filtered = filter_mr_results(
+            results,
+            directions=mr_dir_filter,
+            statuses=mr_status_filter,
+            setup_types=mr_setup_filter,
+            timeframes=mr_timeframes if mr_timeframes else None,
+            alignment_only=mr_alignment_only,
+        )
+    else:
+        filtered = pd.DataFrame()
+
+    total = len(filtered)
+    event_long = len(filtered[filtered["status"] == "event_long"]) if "status" in filtered.columns else 0
+    event_short = len(filtered[filtered["status"] == "event_short"]) if "status" in filtered.columns else 0
+    location = len(filtered[filtered["status"] == "location"]) if "status" in filtered.columns else 0
+    scanned_label = format_scanned_at(mr_meta.get("scanned_at"), short=True) if mr_meta else "Never"
+
+    _render_mr_summary_metrics(
+        total=total, event_long=event_long, event_short=event_short,
+        location=location, scanned_label=scanned_label,
+    )
+
+    display_cols = [
+        "symbol", "timeframe", "status", "direction", "setup_type",
+        "close", "ema_spread_pct", "compression_pct", "alignment_ok",
+        "bars_in_compression", "consolidation_high", "consolidation_low",
+    ]
+    col_rename = {
+        "symbol": "Symbol", "timeframe": "TF", "status": "Status",
+        "direction": "Dir", "setup_type": "Setup", "close": "Close",
+        "ema_spread_pct": "EMA Spr %", "compression_pct": "Comp %",
+        "alignment_ok": "Aligned", "bars_in_compression": "Bars",
+        "consolidation_high": "Cons High", "consolidation_low": "Cons Low",
+    }
+
+    if not filtered.empty:
+        df_display = filtered[[c for c in display_cols if c in filtered.columns]].rename(columns=col_rename)
+
+        def _highlight(row):
+            styles = [""] * len(row)
+            cols = row.index.tolist()
+            if "Status" in cols:
+                idx = cols.index("Status")
+                val = row["Status"]
+                if val == "event_long":
+                    styles[idx] = "background-color: #059669; color: white; font-weight: bold"
+                elif val == "event_short":
+                    styles[idx] = "background-color: #dc2626; color: white; font-weight: bold"
+                elif val == "location":
+                    styles[idx] = "background-color: #d97706; color: white; font-weight: bold"
+            if "Dir" in cols:
+                idx = cols.index("Dir")
+                if row["Dir"] == "long":
+                    styles[idx] = "color: #26a69a; font-weight: bold"
+                else:
+                    styles[idx] = "color: #ef5350; font-weight: bold"
+            return styles
+
+        st.dataframe(
+            df_display.style.apply(_highlight, axis=1),
+            use_container_width=True, hide_index=True,
+            height=min(500, 35 + total * 35),
+        )
+    else:
+        st.info("No setups match current filters.")
+
+    st.download_button(
+        "Download Mean Reversion CSV",
+        filtered.to_csv(index=False) if not filtered.empty else "",
+        file_name="mean_reversion_scan.csv",
+        mime="text/csv",
+        key="mr_download",
+    )
+
+    chart_symbols = (
+        filtered["symbol"].astype(str).tolist()
+        if not filtered.empty and "symbol" in filtered.columns
+        else results["symbol"].astype(str).tolist() if isinstance(results, pd.DataFrame) and "symbol" in results.columns else []
+    )
+    if chart_symbols:
+        prev_pick = st.session_state.get("mr_chart_pick")
+        if prev_pick not in chart_symbols:
+            st.session_state["mr_chart_pick"] = chart_symbols[0]
+
+        chart_col1, chart_col2 = st.columns([3, 1])
+        with chart_col1:
+            pick = st.selectbox("Chart symbol", chart_symbols, key="mr_chart_pick")
+        with chart_col2:
+            chart_tf = st.selectbox("Chart TF", mr_timeframes if mr_timeframes else ["1D"], key="mr_chart_tf")
+
+        try:
+            fig = _mr_chart(pick, timeframe=chart_tf, compression_threshold=compression_high)
+            st.plotly_chart(fig, use_container_width=True, key="mr_plotly_chart")
+        except Exception as exc:
+            st.error(f"Chart failed for {pick}: {exc}")
+
+        row = filtered[filtered["symbol"].astype(str) == pick] if not filtered.empty and "symbol" in filtered.columns else pd.DataFrame()
+        if row.empty and isinstance(results, pd.DataFrame) and "symbol" in results.columns:
+            row = results[results["symbol"].astype(str) == pick]
+        if not row.empty:
+            r = row.iloc[0]
+            _render_card_html(f"""
+<div class="cpr-detail-stats">
+  <span class="cpr-detail-stat">Status <b>{r.get('status', '—')}</b></span>
+  <span class="cpr-detail-stat">Direction <b>{r.get('direction', '—')}</b></span>
+  <span class="cpr-detail-stat">Setup <b>{r.get('setup_type', '—')}</b></span>
+  <span class="cpr-detail-stat">EMA Spread <b>{r.get('ema_spread_pct', '—')}%</b></span>
+  <span class="cpr-detail-stat">Compression <b>{r.get('compression_pct', '—')}%</b></span>
+  <span class="cpr-detail-stat">Aligned <b>{"Yes" if r.get('alignment_ok') else "No"}</b></span>
+  <span class="cpr-detail-stat">Cons. High/Low <b>{r.get('consolidation_high', '—')} / {r.get('consolidation_low', '—')}</b></span>
+</div>
+""")
+
+tab_breakout, tab_cpr, tab_mr = st.tabs(["Breakout Scanner", "CPR Scanner", "Mean Reversion"])
 
 with tab_breakout:
     render_breakout_tab(
@@ -1870,6 +2210,14 @@ with tab_breakout:
 
 with tab_cpr:
     render_cpr_tab(
+        scan_symbols,
+        universe_choice=universe_choice,
+        universe_total=universe_total,
+        universe_sample=universe_sample,
+    )
+
+with tab_mr:
+    render_mean_reversion_tab(
         scan_symbols,
         universe_choice=universe_choice,
         universe_total=universe_total,

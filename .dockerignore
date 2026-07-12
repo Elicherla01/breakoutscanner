@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Cached price data (stored in Docker volume at runtime)
+data_cache/
+
+# Streamlit secrets (never bake credentials into image)
+.streamlit/secrets.toml
+
+# IDE & OS artefacts
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker files themselves (no need to copy into image)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Docs / screenshots (not needed at runtime)
+docs/
+README.md
+IMPLEMENTATION.md
+DISCLAIMER.md
+LICENSE

@@ -15,6 +15,9 @@ from config import (
     CPR_SCAN_META_JSON,
     CPR_SCAN_RESULTS_CSV,
     CPR_TIMEFRAMES,
+    MR_SCAN_INFO_CSV,
+    MR_SCAN_META_JSON,
+    MR_SCAN_RESULTS_CSV,
     SCAN_INFO_CSV,
     SCAN_META_JSON,
     SCAN_RESULTS_CSV,
@@ -331,3 +334,79 @@ def _parse_bool(val: object) -> bool:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return False
     return str(val).strip().lower() in {"1", "true", "yes", "t"}
+
+
+# ---------------------------------------------------------------------------
+# Mean Reversion results
+# ---------------------------------------------------------------------------
+
+_MR_INFO_COLUMNS = (
+    "scanned_at",
+    "scanned_at_display",
+    "symbols_scanned",
+    "timeframes",
+    "compression_threshold",
+    "result_count",
+)
+
+
+def save_mr_results(df: pd.DataFrame, meta: dict[str, Any] | None = None) -> None:
+    """Write Mean Reversion scan results to data_cache/."""
+    ensure_dirs()
+    scanned_at = datetime.now(_DISPLAY_TZ).replace(microsecond=0)
+    scanned_iso = scanned_at.isoformat(timespec="seconds")
+    scanned_display = format_scanned_at(scanned_at)
+
+    out = df.copy()
+    out["scanned_at"] = scanned_iso
+    out.to_csv(MR_SCAN_RESULTS_CSV, index=False)
+
+    meta = meta or {}
+    timeframes = meta.get("timeframes", [])
+    tf_str = ", ".join(timeframes) if isinstance(timeframes, list) else str(timeframes)
+
+    info_row = {
+        "scanned_at": scanned_iso,
+        "scanned_at_display": scanned_display,
+        "symbols_scanned": meta.get("symbols", ""),
+        "timeframes": tf_str,
+        "compression_threshold": meta.get("compression_threshold", ""),
+        "result_count": len(out),
+    }
+    pd.DataFrame([info_row], columns=list(_MR_INFO_COLUMNS)).to_csv(MR_SCAN_INFO_CSV, index=False)
+
+    payload = {
+        **meta,
+        "scanned_at": scanned_iso,
+        "scanned_at_display": scanned_display,
+        "saved_at": scanned_iso,
+        "row_count": len(out),
+    }
+    MR_SCAN_META_JSON.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_mr_results() -> tuple[Optional[pd.DataFrame], dict[str, Any]]:
+    """Load cached Mean Reversion scan results."""
+    if not MR_SCAN_RESULTS_CSV.is_file():
+        return None, {}
+
+    try:
+        df = pd.read_csv(MR_SCAN_RESULTS_CSV)
+        if "session_date" in df.columns:
+            df["session_date"] = pd.to_datetime(df["session_date"], errors="coerce").dt.date
+        for col in ("ema_spread_pct", "compression_pct", "close", "ema20", "ema50", "ema100", "ema200",
+                     "consolidation_high", "consolidation_low", "event_price", "bars_in_compression"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "alignment_ok" in df.columns:
+            df["alignment_ok"] = df["alignment_ok"].map(_parse_bool)
+        meta = {}
+        if MR_SCAN_META_JSON.is_file():
+            meta = json.loads(MR_SCAN_META_JSON.read_text(encoding="utf-8"))
+        return df, meta
+    except Exception:
+        return None, {}
+
+
+def cached_mr_scan_available() -> bool:
+    return MR_SCAN_RESULTS_CSV.is_file()
