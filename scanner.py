@@ -58,6 +58,8 @@ def scan_universe(
     symbols = [s.upper() for s in symbols]
     timeframes = sort_timeframes(timeframes)
     rows: list[dict] = []
+    from ml_engine import train_confidence_model, predict_confidence
+    ml_model = train_confidence_model(use_cache=True)
     total = len(symbols) * len(timeframes)
     done = 0
 
@@ -90,6 +92,8 @@ def scan_universe(
                 direction_filter=direction_filter,
             )
             if row:
+                conf = predict_confidence(row, ml_model, bar_cache.get((sym, tf)))
+                row["ml_confidence"] = round(conf * 100.0, 1) if conf is not None else None
                 rows.append(row)
 
     if not rows:

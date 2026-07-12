@@ -276,15 +276,29 @@ def scan_today_cpr(
     if not required.issubset(df.columns):
         return None
 
-    # Only previous session (CPR reference) + latest session (today)
-    df = df.tail(2)
-    if len(df) < 2:
-        return None
+    from datetime import timedelta
+    today = date.today()
+    latest_bar_date = _to_date(df.index[-1])
+    is_future_session = latest_bar_date < today
 
-    source_bar = df.iloc[-2]
-    session_bar = df.iloc[-1]
-    source_date = _to_date(df.index[-2])
-    session_date = _to_date(df.index[-1])
+    if is_future_session:
+        source_bar = df.iloc[-1]
+        source_date = latest_bar_date
+        if timeframe == "Weekly":
+            session_date = source_date + timedelta(days=7)
+        else:
+            next_date = source_date + timedelta(days=1)
+            while next_date.weekday() >= 5:
+                next_date += timedelta(days=1)
+            session_date = next_date
+    else:
+        # Only previous session (CPR reference) + latest session (today)
+        df_scan = df.tail(2)
+        if len(df_scan) < 2:
+            return None
+        source_bar = df_scan.iloc[-2]
+        source_date = _to_date(df_scan.index[-2])
+        session_date = _to_date(df_scan.index[-1])
 
     levels = compute_cpr(
         _scalar(source_bar, "high"),
@@ -297,12 +311,19 @@ def scan_today_cpr(
     width_percentile = float("nan")
     narrow_thr = NARROW_CPR_PCT
 
-    ltp = _scalar(session_bar, "close")
-    touched_today = cpr_zone_touched(
-        _scalar(session_bar, "high"), _scalar(session_bar, "low"), levels.tc, levels.bc
-    )
-    is_virgin = not touched_today
-    days_virgin = 1 if is_virgin else 0
+    if is_future_session:
+        ltp = _scalar(source_bar, "close")
+        touched_today = False
+        is_virgin = True
+        days_virgin = 1
+    else:
+        session_bar = df_scan.iloc[-1]
+        ltp = _scalar(session_bar, "close")
+        touched_today = cpr_zone_touched(
+            _scalar(session_bar, "high"), _scalar(session_bar, "low"), levels.tc, levels.bc
+        )
+        is_virgin = not touched_today
+        days_virgin = 1 if is_virgin else 0
 
     dist, virgin_level, trend = _signed_distance_pct(ltp, levels.tc, levels.bc)
 

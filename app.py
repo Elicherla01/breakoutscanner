@@ -650,6 +650,10 @@ def _breakout_card_html(row: pd.Series) -> str:
         badges.append('<span class="card-pill high52">52W High</span>')
     if is_strict:
         badges.append('<span class="card-pill high52">Strict</span>')
+    
+    ml_conf = row.get("ml_confidence")
+    if ml_conf is not None and pd.notna(ml_conf):
+        badges.append(f'<span class="card-pill ml-conf" style="background: rgba(37,99,235,0.25); color: #bfdbfe; font-weight: bold;">ML Conf: {float(ml_conf):.0f}%</span>')
 
     stats_row1 = [
         f'<span class="card-stat">Close <b>₹{float(row["close"]):,.2f}</b></span>',
@@ -708,6 +712,10 @@ def _style_results(df: pd.DataFrame) -> pd.DataFrame:
     out["direction"] = out["direction"].map(lambda d: _DIR_STYLE.get(d, ("—", ""))[0])
     out["timeframe"] = out["timeframe"].map(lambda t: TIMEFRAMES[t].label if t in TIMEFRAMES else t)
     out["is_52w_high"] = out["is_52w_high"].map(lambda x: "Yes" if x else "No")
+    if "ml_confidence" in out.columns:
+        out["ml_confidence"] = out["ml_confidence"].map(
+            lambda x: f"{float(x):.1f}%" if x is not None and pd.notna(x) else "—"
+        )
     if "mode" in out.columns:
         out["mode"] = out["mode"].map(lambda m: "Strict (ATR)" if m == "strict" else "Standard")
     rename = {
@@ -727,6 +735,7 @@ def _style_results(df: pd.DataFrame) -> pd.DataFrame:
         "bar_time": "Bar Date",
         "lookback": "Lookback",
         "is_52w_high": "52W High?",
+        "ml_confidence": "ML Confidence",
     }
     return out.rename(columns={k: v for k, v in rename.items() if k in out.columns})
 
@@ -1523,6 +1532,27 @@ _render_disclaimer_banner()
 universe = load_universe_symbols()
 
 with st.sidebar:
+    st.header("Market Regime")
+    if "market_regime" not in st.session_state:
+        from ml_engine import get_market_regime_classification
+        with st.spinner("Classifying market regime..."):
+            st.session_state["market_regime"] = get_market_regime_classification()
+            
+    regime = st.session_state["market_regime"]
+    st.markdown(
+        f'<div style="background-color: {regime["color"]}18; padding: 12px; border-left: 4px solid {regime["color"]}; border-radius: 4px; margin-bottom: 15px;">'
+        f'<span style="font-size: 0.78rem; text-transform: uppercase; color: #9aa0a6; font-weight: bold;">Nifty 50 State</span><br>'
+        f'<span style="font-size: 1.1rem; font-weight: bold; color: {regime["color"]};">{regime["name"]}</span><br>'
+        f'<span style="font-size: 0.82rem; color: #cbd5e1; line-height: 1.35; display: inline-block; margin-top: 4px;">{regime["desc"]}</span>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+    if st.button("Refresh Market Regime", use_container_width=True, key="refresh_regime_btn"):
+        from ml_engine import get_market_regime_classification
+        st.session_state["market_regime"] = get_market_regime_classification()
+        st.rerun()
+
+    st.divider()
     st.header("Universe")
     universe_choice = st.selectbox(
         "Symbol universe",
@@ -1604,6 +1634,17 @@ with st.sidebar:
             "Standard: close > prior N-bar high/low + volume surge + strong close. "
             "Weekly (Fri close) and monthly bars resampled from daily data."
         )
+
+    st.divider()
+    st.header("ML Confidence Model")
+    if st.button("Train ML Model", use_container_width=True, help="Re-trains the Random Forest breakout classifier on watchlist stock history."):
+        from ml_engine import train_confidence_model
+        with st.spinner("Training model on historical breakouts..."):
+            model = train_confidence_model(use_cache=False)
+            if model is not None:
+                st.success("Model trained and cached successfully!")
+            else:
+                st.error("Failed to train model (insufficient historical breakouts found).")
 
     _render_disclaimer_sidebar()
 
