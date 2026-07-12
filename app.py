@@ -703,6 +703,10 @@ def _breakout_card_html(row: pd.Series) -> str:
     tr_atr = row.get("tr_atr_ratio")
     bar_time = row.get("bar_time", "")
     is_strict = str(row.get("mode", "")).lower() == "strict"
+    try:
+        lookback_val = int(float(row.get("lookback", 20)))
+    except (ValueError, TypeError):
+        lookback_val = 20
 
     badges = [
         f'<span class="card-pill">{tf_label}</span>',
@@ -741,7 +745,7 @@ def _breakout_card_html(row: pd.Series) -> str:
         f"</div>"
         f'<div class="card-stat-row">{"".join(stats_row1)}</div>'
         f'<div class="card-stat-row">{"".join(stats_row2)}</div>'
-        f'<span class="card-foot">Bar {bar_time} · Lookback {int(row.get("lookback", 0))} bars</span>'
+        f'<span class="card-foot">Bar {bar_time} · Lookback {lookback_val} bars</span>'
         f"</div>"
     )
 
@@ -1410,6 +1414,144 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
         )
 
 
+def _confluence_card_html(symbol: str, direction: str, group_df: pd.DataFrame) -> str:
+    cls = "bullish" if direction.lower() == "bullish" else "bearish"
+    dir_label = "Bullish" if direction.lower() == "bullish" else "Bearish"
+    
+    tf_keys = list(TIMEFRAMES.keys())
+    group_df = group_df.copy()
+    group_df["_tf_order"] = group_df["timeframe"].map(lambda t: tf_keys.index(t) if t in tf_keys else 99)
+    group_df = group_df.sort_values("_tf_order")
+    
+    badges = [f'<span class="card-pill">{dir_label}</span>']
+    
+    timeframe_rows_html = []
+    for _, row in group_df.iterrows():
+        tf = row["timeframe"]
+        tf_label = TIMEFRAMES[tf].label if tf in TIMEFRAMES else tf
+        close_val = float(row["close"])
+        break_pct = float(row.get("breakout_pct", 0))
+        sign = "+" if break_pct >= 0 else ""
+        vol = row.get("volume_ratio")
+        vol_txt = f"{float(vol):.2f}×" if vol is not None and pd.notna(vol) else "—"
+        ml_conf = row.get("ml_confidence")
+        ml_txt = f"{float(ml_conf):.0f}%" if ml_conf is not None and pd.notna(ml_conf) else "—"
+        
+        tf_badge_class = "high52" if tf in ("1W", "1M") else ""
+        
+        row_html = (
+            f'<div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 6px; margin-top: 6px; font-size: 0.82rem; color: #cbd5e1;">'
+            f'  <span class="card-pill {tf_badge_class}" style="margin: 0; padding: 2px 6px; font-size: 0.72rem;">{tf_label}</span>'
+            f'  <span>₹{close_val:,.2f} ({sign}{break_pct:.1f}%)</span>'
+            f'  <span>Vol: <b>{vol_txt}</b></span>'
+            f'  <span style="color: #93c5fd;">ML: <b>{ml_txt}</b></span>'
+            f'</div>'
+        )
+        timeframe_rows_html.append(row_html)
+        
+    return (
+        f'<div class="breakout-card {cls}" style="padding: 1.1rem; border-radius: 12px; margin-bottom: 12px; background: rgba(30,41,59,0.45); border: 1px solid rgba(255,255,255,0.08);">'
+        f'<div class="card-top" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">'
+        f'<span class="card-symbol" style="font-size: 1.25rem; font-weight: 800; color: white;">{symbol}</span>'
+        f'<span class="card-badges">{"".join(badges)}</span>'
+        f"</div>"
+        f'{"".join(timeframe_rows_html)}'
+        f"</div>"
+    )
+
+
+def _style_confluence_results(confluence_symbols) -> pd.DataFrame:
+    rows = []
+    for symbol, direction, group in confluence_symbols:
+        tf_keys = list(TIMEFRAMES.keys())
+        tfs = sorted(group["timeframe"].unique(), key=lambda t: tf_keys.index(t) if t in tf_keys else 99)
+        tfs_str = ", ".join([TIMEFRAMES[t].label if t in TIMEFRAMES else t for t in tfs])
+        
+        row = {
+            "Symbol": symbol,
+            "Direction": "Bullish" if direction.lower() == "bullish" else "Bearish",
+            "Timeframes": tfs_str,
+        }
+        
+        ml_confs = [float(val) for val in group["ml_confidence"].dropna() if pd.notna(val)]
+        row["Max ML Confidence"] = f"{max(ml_confs):.0f}%" if ml_confs else "—"
+        
+        for tf in ("1H", "1D", "1W", "1M"):
+            tf_row = group[group["timeframe"] == tf]
+            if not tf_row.empty:
+                bp = float(tf_row.iloc[0].get("breakout_pct", 0))
+                close_val = float(tf_row.iloc[0]["close"])
+                row[f"{tf} Breakout"] = f"₹{close_val:,.1f} ({bp:+.1f}%)"
+            else:
+                row[f"{tf} Breakout"] = "—"
+                
+        rows.append(row)
+        
+    return pd.DataFrame(rows)
+
+
+def render_confluence_view(df: pd.DataFrame) -> None:
+    if df.empty:
+        st.info("No breakouts found to analyze confluence.")
+        return
+
+    st.markdown("#### Filter Confluence Timeframes")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        req_tfs = st.multiselect(
+            "Require breakout in timeframes",
+            options=["1H", "1D", "1W", "1M"],
+            default=["1H", "1D", "1W", "1M"],
+            key="conf_tfs_req",
+        )
+    with col2:
+        min_tfs_count = st.slider(
+            "Min matching timeframes",
+            1,
+            4,
+            len(req_tfs) if req_tfs else 2,
+            key="conf_tfs_min",
+        )
+
+    if not req_tfs:
+        st.warning("Please select at least one timeframe to find confluence.")
+        return
+
+    groups = df.groupby(["symbol", "direction"])
+    confluence_symbols = []
+    for (symbol, direction), group in groups:
+        tfs_in_group = set(group["timeframe"].unique())
+        matching_tfs = tfs_in_group.intersection(req_tfs)
+        if len(matching_tfs) >= min_tfs_count:
+            confluence_symbols.append((symbol, direction, group))
+
+    if not confluence_symbols:
+        st.info("No confluence breakouts found matching the selected timeframe criteria.")
+        return
+
+    st.markdown(f"Found **{len(confluence_symbols)}** stocks with multi-timeframe confluence.")
+
+    view = st.radio(
+        "View mode",
+        ["Cards", "Table"],
+        horizontal=True,
+        key="confluence_view_mode",
+        label_visibility="collapsed",
+    )
+
+    if view == "Cards":
+        cols_per_row = 3
+        for i in range(0, len(confluence_symbols), cols_per_row):
+            chunk = confluence_symbols[i : i + cols_per_row]
+            cols = st.columns(cols_per_row)
+            for c_idx, (symbol, direction, group) in enumerate(chunk):
+                with cols[c_idx]:
+                    _render_card_html(_confluence_card_html(symbol, direction, group))
+    else:
+        styled = _style_confluence_results(confluence_symbols)
+        st.dataframe(styled, use_container_width=True, hide_index=True, key="df_confluence_table")
+
+
 def render_breakout_tab(
     scan_symbols: list[str],
     *,
@@ -1529,7 +1671,7 @@ def render_breakout_tab(
             if meta.get("mode"):
                 st.caption(f"Mode: **{meta['mode']}** · cached results — use **Force Refresh Scan** to update")
 
-            tf_tabs = st.tabs(["All"] + [TIMEFRAMES[t].label for t in display_tfs])
+            tf_tabs = st.tabs(["All", "Confluence 🌀"] + [TIMEFRAMES[t].label for t in display_tfs])
 
             def _show(df: pd.DataFrame, key: str) -> None:
                 if not df.empty and "bar_time" in df.columns:
@@ -1570,7 +1712,9 @@ def render_breakout_tab(
 
             with tf_tabs[0]:
                 _show(results, "all")
-            for i, tf in enumerate(display_tfs, start=1):
+            with tf_tabs[1]:
+                render_confluence_view(results)
+            for i, tf in enumerate(display_tfs, start=2):
                 with tf_tabs[i]:
                     _show(results[results["timeframe"] == tf], tf.lower())
 
