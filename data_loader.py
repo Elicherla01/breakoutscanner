@@ -26,6 +26,7 @@ from config import (
     UNIVERSE_CACHE,
     UNIVERSE_CHOICES,
     UNIVERSE_FNO,
+    UNIVERSE_NIFTY10,
     UNIVERSE_NIFTY50,
     UNIVERSE_NIFTY500,
     YAHOO_TICKER_MAP,
@@ -144,7 +145,11 @@ def resolve_universe_symbols(
     Returns (symbols, sample_mode, universe_total) where sample_mode is
     'nifty50', 'fno', 'full', or 'even'.
     """
-    choice = choice or UNIVERSE_NIFTY500
+    choice = choice or UNIVERSE_NIFTY10
+    if choice == UNIVERSE_NIFTY10:
+        top_10 = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "LT", "TCS", "ITC", "BHARTIARTL", "SBIN", "KOTAKBANK"]
+        return top_10, "nifty10", 10
+
     if choice == UNIVERSE_NIFTY50:
         symbols = load_nifty50_symbols()
         return symbols, "nifty50", len(symbols)
@@ -233,6 +238,45 @@ def fetch_hourly(symbol: str, period: str = HOURLY_PERIOD) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def fetch_daily_range(symbol: str, start: date, end: date) -> pd.DataFrame:
+    ticker = yahoo_ticker(symbol)
+    try:
+        with _YF_LOCK:
+            df = yf.download(
+                ticker,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+                threads=False,
+            )
+        return _normalize_ohlcv(df)
+    except Exception:
+        return pd.DataFrame()
+
+
+def fetch_hourly_range(symbol: str, start: date, end: date) -> pd.DataFrame:
+    ticker = yahoo_ticker(symbol)
+    try:
+        with _YF_LOCK:
+            df = yf.download(
+                ticker,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                interval="1h",
+                progress=False,
+                auto_adjust=True,
+                threads=False,
+            )
+        out = _normalize_ohlcv(df)
+        if "volume" in out.columns:
+            out = out[out["volume"].fillna(0) >= 0]
+        return out
+    except Exception:
+        return pd.DataFrame()
+
+
 _OHLCV_AGG = {
     "open": "first",
     "high": "max",
@@ -261,6 +305,7 @@ def resample_monthly(daily: pd.DataFrame) -> pd.DataFrame:
         last_start = monthly.index[-1].to_period("M").start_time
         elapsed = int((daily.index >= last_start).sum())
         if 0 < elapsed < 18:
+            monthly["volume"] = monthly["volume"].astype(float)
             vol_col = monthly.columns.get_loc("volume")
             monthly.iloc[-1, vol_col] = monthly.iloc[-1, vol_col] * 21.0 / elapsed
     return monthly
@@ -269,18 +314,36 @@ def resample_monthly(daily: pd.DataFrame) -> pd.DataFrame:
 def load_daily(symbol: str, days: int = LOOKBACK_DAYS, use_cache: bool = True) -> pd.DataFrame:
     sym = symbol.upper()
     path = CACHE_DAILY / f"{sym}.csv"
-    # Deep requests (monthly bars) must not be satisfied by a short cached file
     min_rows = min(60, days // 3) if days <= 500 else int(days * 0.45)
 
+    df_cached = pd.DataFrame()
     if use_cache and path.is_file():
         try:
-            df = _read_csv_cache(path)
-            fresh = not df.empty and df.index[-1].date() >= date.today() - timedelta(days=3)
-            if fresh and len(df) >= min_rows:
-                return df
+            df_cached = _read_csv_cache(path)
+            fresh = not df_cached.empty and df_cached.index[-1].date() >= date.today() - timedelta(days=3)
+            if fresh and len(df_cached) >= min_rows:
+                return df_cached
         except Exception:
             pass
 
+    # Incremental update logic
+    if not df_cached.empty:
+        try:
+            last_cached_date = df_cached.index[-1].date()
+            if last_cached_date < date.today():
+                start_fetch = last_cached_date - timedelta(days=5) # 5 days overlap for safety
+                end_fetch = date.today() + timedelta(days=1)
+                df_new = fetch_daily_range(sym, start_fetch, end_fetch)
+                if not df_new.empty:
+                    df_merged = pd.concat([df_cached, df_new])
+                    df_merged = df_merged[~df_merged.index.duplicated(keep="last")].sort_index()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    df_merged.to_csv(path)
+                    return df_merged
+        except Exception:
+            pass
+
+    # Sibling daily cache or full download fallback
     df = _sibling_daily_cache(sym)
     if df.empty or len(df) < min_rows:
         df = fetch_daily(sym, days=days)
@@ -295,12 +358,30 @@ def load_hourly(symbol: str, use_cache: bool = True) -> pd.DataFrame:
     path = CACHE_HOURLY / f"{sym}.csv"
     min_rows = 40
 
+    df_cached = pd.DataFrame()
     if use_cache and path.is_file():
         try:
-            df = _read_csv_cache(path)
-            fresh = not df.empty and df.index[-1].date() >= date.today() - timedelta(days=2)
-            if fresh and len(df) >= min_rows:
-                return df
+            df_cached = _read_csv_cache(path)
+            fresh = not df_cached.empty and df_cached.index[-1].date() >= date.today() - timedelta(days=2)
+            if fresh and len(df_cached) >= min_rows:
+                return df_cached
+        except Exception:
+            pass
+
+    # Incremental update logic
+    if not df_cached.empty:
+        try:
+            last_cached_date = df_cached.index[-1].date()
+            if last_cached_date < date.today():
+                start_fetch = last_cached_date - timedelta(days=3)
+                end_fetch = date.today() + timedelta(days=1)
+                df_new = fetch_hourly_range(sym, start_fetch, end_fetch)
+                if not df_new.empty:
+                    df_merged = pd.concat([df_cached, df_new])
+                    df_merged = df_merged[~df_merged.index.duplicated(keep="last")].sort_index()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    df_merged.to_csv(path)
+                    return df_merged
         except Exception:
             pass
 

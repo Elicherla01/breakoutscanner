@@ -73,6 +73,24 @@ def save_scan_results(df: pd.DataFrame, meta: dict[str, Any]) -> Path:
 
     out = df.copy()
     out["scanned_at"] = scanned_iso
+
+    # Accumulate results historically
+    if SCAN_RESULTS_CSV.is_file():
+        try:
+            df_old = pd.read_csv(SCAN_RESULTS_CSV)
+            if not df_old.empty:
+                df_old["bar_time"] = df_old["bar_time"].astype(str)
+                out["bar_time"] = out["bar_time"].astype(str)
+                
+                df_merged = pd.concat([df_old, out], ignore_index=True)
+                df_merged = df_merged.drop_duplicates(
+                    subset=["symbol", "timeframe", "direction", "bar_time"],
+                    keep="last"
+                )
+                out = df_merged
+        except Exception:
+            pass
+
     out.to_csv(SCAN_RESULTS_CSV, index=False)
 
     timeframes = meta.get("timeframes") or []
@@ -187,6 +205,24 @@ def save_cpr_results(df: pd.DataFrame, meta: dict[str, Any]) -> Path:
     out = df.copy()
     out["scanned_at"] = scanned_iso
     out["timeframe"] = timeframe
+
+    # Accumulate results historically
+    if results_csv.is_file():
+        try:
+            df_old = pd.read_csv(results_csv)
+            if not df_old.empty:
+                df_old["session_date"] = df_old["session_date"].astype(str)
+                out["session_date"] = out["session_date"].astype(str)
+                
+                df_merged = pd.concat([df_old, out], ignore_index=True)
+                df_merged = df_merged.drop_duplicates(
+                    subset=["symbol", "timeframe", "session_date"],
+                    keep="last"
+                )
+                out = df_merged
+        except Exception:
+            pass
+
     out.to_csv(results_csv, index=False)
 
     info_row = {

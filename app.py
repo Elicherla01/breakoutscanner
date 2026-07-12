@@ -17,6 +17,7 @@ from config import (
     TIMEFRAME_ORDER,
     UNIVERSE_CHOICES,
     UNIVERSE_FNO,
+    UNIVERSE_NIFTY10,
     UNIVERSE_NIFTY500,
     cpr_scan_paths,
     ensure_dirs,
@@ -1313,6 +1314,8 @@ padding:1rem 1.25rem;border-radius:12px;margin-bottom:1rem;">
         types=type_filter or None,
         trend=trend_filter,
     )
+    if not filtered.empty and "session_date" in filtered.columns:
+        filtered = filtered.sort_values("session_date", ascending=False)
 
     scanned_label = _cpr_scanned_label(meta, short=True)
     session_date = (
@@ -1529,6 +1532,8 @@ def render_breakout_tab(
             tf_tabs = st.tabs(["All"] + [TIMEFRAMES[t].label for t in display_tfs])
 
             def _show(df: pd.DataFrame, key: str) -> None:
+                if not df.empty and "bar_time" in df.columns:
+                    df = df.sort_values("bar_time", ascending=False)
                 view = st.radio(
                     "View",
                     ["Cards", "Table"],
@@ -1618,7 +1623,7 @@ with st.sidebar:
     universe_choice = st.selectbox(
         "Symbol universe",
         list(UNIVERSE_CHOICES),
-        index=list(UNIVERSE_CHOICES).index(UNIVERSE_NIFTY500),
+        index=list(UNIVERSE_CHOICES).index(UNIVERSE_NIFTY10),
         help="Applies to both Breakout and CPR scanners.",
     )
     max_symbols = st.slider(
