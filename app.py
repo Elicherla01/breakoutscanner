@@ -621,7 +621,14 @@ def _render_last_scan_panel(meta: dict, results: pd.DataFrame | None = None) -> 
     if not scanned_at or scanned_at == "—":
         return
 
-    n_breakouts = int(meta.get("breakout_count", len(results) if results is not None else 0))
+    bo_count_val = meta.get("breakout_count")
+    if bo_count_val is None or pd.isna(bo_count_val):
+        n_breakouts = len(results) if results is not None else 0
+    else:
+        try:
+            n_breakouts = int(bo_count_val)
+        except (ValueError, TypeError):
+            n_breakouts = len(results) if results is not None else 0
     n_sym = meta.get("symbols_scanned", meta.get("symbols", "—"))
     timeframes = meta.get("timeframes", "")
     if isinstance(timeframes, list):
